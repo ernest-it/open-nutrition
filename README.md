@@ -12,6 +12,27 @@ Open Nutrition tracks calories, macros, micronutrients, weight and water, with n
 - 🥦 **Bundled USDA food database** for offline search with full micronutrient data, plus **barcode scanning** against Open Food Facts.
 - ✨ **AI meal logging (optional).** Take a photo and/or describe a meal, and Claude estimates what is on the plate. You review the estimate before anything is saved. Off until you turn it on.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/android/02-today.png" width="200" alt="Today"></td>
+    <td><img src="docs/screenshots/android/05-food-search.png" width="200" alt="Food search"></td>
+    <td><img src="docs/screenshots/android/08-nutrients.png" width="200" alt="Nutrients report"></td>
+    <td><img src="docs/screenshots/android/09-body.png" width="200" alt="Weight and body"></td>
+  </tr>
+  <tr>
+    <td align="center">Today</td>
+    <td align="center">Food search</td>
+    <td align="center">Nutrients</td>
+    <td align="center">Weight & body</td>
+  </tr>
+</table>
+
+<img src="docs/screenshots/web/02-today.png" width="820" alt="Web UI: Today">
+
+More in **[docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)**, including the web UI and dark mode.
+
 > Open Nutrition is under active development. The table below is the intended v0.1 feature set, following the phases in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Features (v0.1)

@@ -142,7 +142,7 @@ export function NutrientsPage({ day }: { day?: string }) {
               const st = statusFor(def.key, v, t); // null without a target: empty track, no tick
               const pct = st ? Math.min(v / t, 1.5) / 1.5 : 0;
               const isOpen = open === def.key;
-              const top = isOpen ? topFoodsFor(entries, def.key, 8) : [];
+              const top = isOpen ? topFoodsFor(entries.filter((e) => avgDays.includes(e.date)), def.key, 8) : [];
               return (
                 <li key={def.key} className={`nutrient st-${st ?? 'none'}`}>
                   <button className="nutrient-row" onClick={() => setOpen(isOpen ? null : def.key)} aria-expanded={isOpen}>

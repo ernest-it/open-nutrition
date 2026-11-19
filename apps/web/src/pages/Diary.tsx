@@ -33,7 +33,7 @@ export function DiaryPage({ day: routeDay }: { day?: string }) {
           <section className="card">
             <h3>{dayLabel(day, true)}</h3>
             <NutrientSummary n={totals} />
-            <Bar value={eaten} max={budget} status={statusFor(N.energy, eaten, budget)} label="Calories" />
+            <Bar value={eaten} max={budget} status={day === store.today() && statusFor(N.energy, eaten, budget) === 'under' ? 'ok' : statusFor(N.energy, eaten, budget)} label="Calories" />
             <p className="muted small">
               {budget > 0 ? `${kcal(eaten)} of ${kcal(budget)} kcal · ` : ''}
               {entries.length ? plural(entries.length, 'item') : 'Nothing logged yet'}
