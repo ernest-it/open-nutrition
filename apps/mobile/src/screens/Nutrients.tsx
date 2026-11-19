@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import {
   CORE_NUTRIENTS,
   N,
@@ -11,7 +11,6 @@ import {
   nutrientStatus,
   parseDay,
   sumNutrients,
-
   topFoodsFor,
   type DiaryEntry,
   type NutrientKey,
@@ -21,7 +20,7 @@ import { DailyBars } from '../charts';
 import { MAX_WIDE_WIDTH, useLayout } from '../layout';
 import { useNav } from '../nav';
 import { useStore, useToday } from '../state';
-import { Card, Empty, IconButton, ProgressBar, Screen, Segmented, T, Title, Toggle, formatDay, statusColor, styles, useTheme } from '../ui';
+import { Button, Card, Empty, IconButton, ProgressBar, Screen, Segmented, T, Title, Toggle, formatDay, statusColor, styles, useTheme } from '../ui';
 
 type Period = 'day' | 'week' | 'month';
 let lastPeriod: Period = 'day';
@@ -115,11 +114,18 @@ export function NutrientsScreen() {
       />
       <View style={styles.rowBetween}>
         <IconButton icon="chevronLeft" label="Previous period" onPress={() => setAnchor(shiftAnchor(period, anchor, -1))} />
-        <Pressable onPress={() => setAnchor(today)} accessibilityRole="button" accessibilityHint="Go back to today" style={{ flex: 1, minHeight: 44, justifyContent: 'center' }}>
-          <T bold style={{ textAlign: 'center', fontSize: 16 }}>
+        <View style={{ flex: 1, minHeight: 44, justifyContent: 'center', alignItems: 'center' }}>
+          <T bold style={{ textAlign: 'center', fontSize: 16 }} lines={1}>
             {rangeLabel(period, from, to)}
           </T>
-        </Pressable>
+          {(today < from || today > to) && (
+            <Pressable onPress={() => setAnchor(today)} accessibilityRole="button" hitSlop={8} style={{ minHeight: 28, justifyContent: 'center' }}>
+              <T small color={t.accent} bold>
+                Back to {period === 'day' ? 'today' : period === 'week' ? 'this week' : 'this month'}
+              </T>
+            </Pressable>
+          )}
+        </View>
         <IconButton icon="chevronRight" label="Next period" onPress={() => setAnchor(shiftAnchor(period, anchor, 1))} />
       </View>
       {period !== 'day' && (
@@ -134,7 +140,9 @@ export function NutrientsScreen() {
         </Card>
       )}
       {!entries.length ? (
-        <Empty icon="nutrients" title="Nothing logged in this period" />
+        <Empty icon="nutrients" title="Nothing logged in this period" text="Log a meal and its vitamins, minerals and macros show up here.">
+          {from <= today && today <= to && <Button title="Log food" icon="plus" variant="primary" onPress={() => nav.openAdd({ day: today })} style={{ marginTop: 8 }} />}
+        </Empty>
       ) : (
         <Card>
           {defs.map((d) => {
@@ -185,7 +193,7 @@ export function NutrientsScreen() {
       <ScrollView style={{ flex: 1.2 }} contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
         {report}
       </ScrollView>
-      <View style={{ flex: 1, borderLeftWidth: 1, borderColor: t.border }}>
+      <View style={{ flex: 1, borderLeftWidth: StyleSheet.hairlineWidth, borderColor: t.border }}>
         {focus ? (
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
             <TopFoods nutrient={focus} from={from} to={to} />

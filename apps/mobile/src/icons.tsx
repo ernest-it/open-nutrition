@@ -31,7 +31,10 @@ export type IconName =
   | 'calendar'
   | 'edit'
   | 'move'
-  | 'info';
+  | 'info'
+  | 'alert'
+  | 'cloud'
+  | 'download';
 
 export function Icon({ name, size = 24, color, strokeWidth = 2 }: { name: IconName; size?: number; color: string; strokeWidth?: number }) {
   const p = { stroke: color, strokeWidth, fill: 'none', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
@@ -179,6 +182,17 @@ function shape(name: IconName, p: P, color: string) {
       return <Path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" {...p} />;
     case 'move':
       return <Path d="M5 12h14M15 8l4 4-4 4M9 8l-4 4 4 4" {...p} />;
+    case 'alert':
+      return (
+        <>
+          <Path d="M12 3.5l9.5 16.5h-19z" {...p} />
+          <Path d="M12 10v4.5M12 17.2v.3" {...p} />
+        </>
+      );
+    case 'cloud':
+      return <Path d="M7 18.5h10.5a4 4 0 0 0 .4-8A6 6 0 0 0 6.3 9.6 4.5 4.5 0 0 0 7 18.5z" {...p} />;
+    case 'download':
+      return <Path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14" {...p} />;
     case 'info':
       return (
         <>

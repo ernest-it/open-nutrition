@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import * as SystemUI from 'expo-system-ui';
 import { FoodDbLoader } from './src/foods';
 import { Icon, type IconName } from './src/icons';
 import { useLayout } from './src/layout';
 import { NavContext, type AddOptions, type Nav, type Route, type Tab } from './src/nav';
 import { AccountContext, initStore, loadAccount, saveAccount, store, useFirstSyncDone, useStore, useToday, type Account } from './src/state';
-import { IconButton, ToastProvider, haptic, useTheme } from './src/ui';
+import { NUTRIENT_BY_KEY } from '@open-nutrition/shared';
+import { FeedbackProvider, ToastHost } from './src/feedback';
+import { Button, HeaderTitleContext, IconButton, T, haptic, useTheme } from './src/ui';
 import { ConnectScreen } from './src/screens/Connect';
 import { TodayScreen } from './src/screens/Today';
 import { DiaryScreen } from './src/screens/Diary';
@@ -20,6 +23,11 @@ import { MoreScreen, SettingsScreen } from './src/screens/Settings';
 import { OnboardingScreen, ProfileScreen, TargetsScreen } from './src/screens/Profile';
 
 export default function App() {
+  // Paint the native root view in the theme background: no light flash behind modals or the keyboard in dark mode.
+  const bg = useTheme().bg;
+  useEffect(() => {
+    void SystemUI.setBackgroundColorAsync(bg).catch(() => {});
+  }, [bg]);
   const [account, setAccount] = useState<Account | null | undefined>(undefined);
   const [ready, setReady] = useState(false);
 
@@ -42,13 +50,11 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar style="auto" />
       <FoodDbLoader />
-      <ToastProvider>
+      <FeedbackProvider>
         {loadError ? (
           <LoadError message={loadError} onRetry={() => setAttempt((n) => n + 1)} />
         ) : account === undefined || (account && !ready) ? (
-          <Center>
-            <ActivityIndicator />
-          </Center>
+          <Loading />
         ) : account === null ? (
           <ThemedSafeArea>
             <ConnectScreen
@@ -75,7 +81,7 @@ export default function App() {
             />
           </AccountContext.Provider>
         )}
-      </ToastProvider>
+      </FeedbackProvider>
     </SafeAreaProvider>
   );
 }
@@ -91,15 +97,29 @@ function ThemedSafeArea({ children }: { children: React.ReactNode }) {
   return <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>{children}</SafeAreaView>;
 }
 
+function Loading() {
+  const t = useTheme();
+  return (
+    <Center>
+      <ActivityIndicator size="large" color={t.accent} accessibilityLabel="Loading" />
+    </Center>
+  );
+}
+
 function LoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
   const t = useTheme();
   return (
     <Center>
-      <Text style={{ color: t.text, fontSize: 17, fontWeight: '700', marginBottom: 8 }}>Could not open your data</Text>
-      <Text style={{ color: t.muted, textAlign: 'center', marginHorizontal: 24, marginBottom: 16 }}>{message}</Text>
-      <Pressable onPress={onRetry} accessibilityRole="button" style={{ padding: 12, minHeight: 44 }}>
-        <Text style={{ color: t.accent, fontSize: 16, fontWeight: '600' }}>Try again</Text>
-      </Pressable>
+      <View style={{ alignItems: 'center', gap: 8, paddingHorizontal: 24, maxWidth: 420 }}>
+        <Icon name="alert" size={36} color={t.danger} />
+        <T bold style={{ fontSize: 18, textAlign: 'center' }}>
+          Could not open your data
+        </T>
+        <T muted style={{ textAlign: 'center' }}>
+          {message}
+        </T>
+        <Button title="Try again" variant="primary" onPress={onRetry} style={{ marginTop: 8, minWidth: 160 }} />
+      </View>
     </Center>
   );
 }
@@ -132,12 +152,35 @@ const ROOTS: Record<Tab, Route> = {
   settings: { name: 'settings' },
 };
 
-/** Header titles for pushed routes whose screen has no title of its own. */
-const TITLES: Partial<Record<Route['name'], string>> = {
-  entry: 'Edit entry',
-};
+/** Top-bar title of a pushed route (pushed screens then hide their own big title). */
+function titleOf(route: Route): string {
+  switch (route.name) {
+    case 'entry':
+      return 'Edit entry';
+    case 'foodEdit':
+      return route.id ? 'Edit food' : 'New food';
+    case 'recipeEdit':
+      return route.id ? 'Edit recipe' : 'New recipe';
+    case 'savedMeal':
+      return 'Saved meal';
+    case 'targets':
+      return 'Targets';
+    case 'profile':
+      return 'Profile';
+    case 'topFoods':
+      return NUTRIENT_BY_KEY[route.key]?.name ?? 'Top sources';
+    case 'body':
+      return 'Weight & body';
+    case 'foods':
+      return 'Foods & recipes';
+    case 'settings':
+      return 'Settings';
+    default:
+      return '';
+  }
+}
 
-function Main({ onSignOut }: { onSignOut: () => void }) {
+function Main({ onSignOut }: { onSignOut: () => Promise<void> }) {
   const t = useTheme();
   const s = useStore();
   const today = useToday();
@@ -213,17 +256,25 @@ function Main({ onSignOut }: { onSignOut: () => void }) {
     setTab(key);
   };
 
+  const pushed = stack.length > 1;
   const content = (
     <View style={{ flex: 1 }}>
-      {stack.length > 1 && (
-        <View style={[styles.header, { borderColor: t.border }]}>
+      {pushed && (
+        <View style={[styles.header, { borderColor: t.border, backgroundColor: t.bg }]}>
           <IconButton icon="chevronLeft" label="Back" onPress={pop} />
-          <Text numberOfLines={1} maxFontSizeMultiplier={1.4} style={{ flex: 1, color: t.text, fontSize: 17, fontWeight: '600' }}>
-            {TITLES[route.name] ?? ''}
+          <Text accessibilityRole="header" numberOfLines={1} maxFontSizeMultiplier={1.4} style={{ flex: 1, color: t.text, fontSize: 18, fontWeight: '700' }}>
+            {titleOf(route)}
           </Text>
         </View>
       )}
-      <View style={{ flex: 1 }}>{renderRoute(route, pop, onSignOut)}</View>
+      <HeaderTitleContext.Provider value={pushed}>
+        {/* Keyed by route so a pushed screen starts fresh (scroll position, drafts) instead of reusing the previous one. */}
+        <View key={`${tab}:${stack.length}:${route.name}`} style={{ flex: 1 }}>
+          {renderRoute(route, pop, onSignOut)}
+        </View>
+      </HeaderTitleContext.Provider>
+      {/* Snackbars sit above the tab bar here (and above the keyboard). */}
+      <ToastHost bottom={layout.rail ? 16 : 12} />
     </View>
   );
 
@@ -315,7 +366,7 @@ function Main({ onSignOut }: { onSignOut: () => void }) {
   );
 }
 
-function renderRoute(route: Route, pop: () => void, onSignOut: () => void) {
+function renderRoute(route: Route, pop: () => void, onSignOut: () => Promise<void>) {
   switch (route.name) {
     case 'today':
       return <TodayScreen />;

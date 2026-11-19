@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Alert, View } from 'react-native';
+import { View } from 'react-native';
 import { N, multiplyNutrients, recipePortionGrams, type DiaryEntry, type Meal, type NutrientMap } from '@open-nutrition/shared';
 import { AmountEditor, CalendarModal, MealPicker, NutrientTable, macroLine, sourceLabel, type Amount } from '../components';
-import { useStore } from '../state';
-import { Badge, Button, Card, Empty, H2, Input, NumField, Screen, Stepper, T, formatDay, haptic, kcal, styles, useTheme, useToast } from '../ui';
+import { removeWithUndo, useStore } from '../state';
+import { Badge, Button, Card, Empty, H2, Input, NumField, Screen, Stepper, T, formatDay, haptic, kcal, styles, useOnce, useTheme, useToast } from '../ui';
 
 /** Edit one diary entry: amount, meal, day (move or copy), delete. */
 export function EntryScreen({ id, onDone }: { id: string; onDone: () => void }) {
@@ -25,6 +25,10 @@ export function EntryEditor({ entry, onDone }: { entry: DiaryEntry; onDone: () =
   const recipe = entry.recipeId ? store.get('recipes', entry.recipeId) : undefined;
   const [meal, setMeal] = useState<Meal>(entry.meal);
   const [calendar, setCalendar] = useState<'move' | 'copy' | null>(null);
+  const [calTitle, setCalTitle] = useState('Move to…');
+  useEffect(() => {
+    if (calendar) setCalTitle(calendar === 'copy' ? 'Copy to…' : 'Move to…');
+  }, [calendar]);
 
   // Amount editing (food entries): servings from the food, or the entry's own label.
   const servings = food?.servings.length
@@ -50,7 +54,20 @@ export function EntryEditor({ entry, onDone }: { entry: DiaryEntry; onDone: () =
       ? multiplyNutrients(entry.nutrients, newGrams / entry.grams)
       : entry.nutrients;
 
-  function save() {
+  const newLabel = isQuick || isRecipe ? entry.servingLabel : amount.serving < 0 ? null : (servings[amount.serving]?.label ?? null);
+  const dirty =
+    meal !== entry.meal ||
+    (isQuick
+      ? quickName.trim() !== entry.name || JSON.stringify(quick) !== JSON.stringify(entry.nutrients)
+      : isRecipe
+        ? portions !== entry.quantity
+        : Math.abs(amount.grams - (entry.grams ?? 0)) > 1e-6 || newLabel !== entry.servingLabel);
+  const canSave = isQuick ? Object.keys(quick).length > 0 : newGrams > 0;
+  const once = useOnce();
+
+  /** Write the edited amount / meal to the entry (also used before moving or copying it). */
+  function persist() {
+    if (!dirty || !canSave) return false;
     if (isQuick) {
       store.update('diaryEntries', entry.id, { name: quickName.trim() || 'Quick add', nutrients: quick });
     } else if (isRecipe) {
@@ -69,9 +86,26 @@ export function EntryEditor({ entry, onDone }: { entry: DiaryEntry; onDone: () =
       });
     }
     if (meal !== entry.meal) store.moveEntry(entry.id, { meal });
-    haptic.success();
-    toast('Entry updated');
-    onDone();
+    return true;
+  }
+
+  function save() {
+    once.run(() => {
+      if (persist()) {
+        haptic.success();
+        toast('Entry updated');
+      }
+      onDone();
+    });
+  }
+
+  function remove() {
+    once.run(() => {
+      const undo = removeWithUndo('diaryEntries', [entry.id]);
+      haptic.warn();
+      toast({ message: `Deleted ${entry.name}`, action: { label: 'Undo', onPress: undo } });
+      onDone();
+    });
   }
 
   return (
@@ -112,32 +146,12 @@ export function EntryEditor({ entry, onDone }: { entry: DiaryEntry; onDone: () =
           Meal
         </T>
         <MealPicker value={meal} onChange={setMeal} />
-        <Button title="Save changes" variant="primary" onPress={save} />
+        <Button title={dirty ? 'Save changes' : 'Done'} variant="primary" icon="check" onPress={save} disabled={!canSave} />
       </Card>
-      <View style={[styles.row, { flexWrap: 'wrap' }]}>
+      <View style={[styles.row, { flexWrap: 'wrap', marginTop: 4 }]}>
         <Button small icon="move" title="Move to another day" onPress={() => setCalendar('move')} />
         <Button small icon="copy" title="Copy to another day" onPress={() => setCalendar('copy')} />
-        <Button
-          small
-          icon="trash"
-          variant="danger"
-          title="Delete"
-          onPress={() =>
-            Alert.alert('Delete entry?', entry.name, [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Delete',
-                style: 'destructive',
-                onPress: () => {
-                  store.remove('diaryEntries', entry.id);
-                  haptic.warn();
-                  toast('Entry deleted');
-                  onDone();
-                },
-              },
-            ])
-          }
-        />
+        <Button small icon="trash" variant="danger" title="Delete" onPress={remove} />
       </View>
       {!isQuick && (
         <>
@@ -149,18 +163,20 @@ export function EntryEditor({ entry, onDone }: { entry: DiaryEntry; onDone: () =
       )}
       <CalendarModal
         visible={calendar != null}
-        title={calendar === 'copy' ? 'Copy to…' : 'Move to…'}
+        title={calTitle}
         value={entry.date}
         onClose={() => setCalendar(null)}
         onPick={(day) => {
           const mode = calendar;
           setCalendar(null);
+          // Unsaved amount / meal edits go with the entry instead of being silently dropped.
+          const saved = persist();
           if (mode === 'copy') {
             store.copyEntries([entry.id], { day, meal });
-            toast(`Copied to ${formatDay(day)}`);
+            toast(`${saved ? 'Saved and copied' : 'Copied'} to ${formatDay(day)}`);
           } else {
             store.moveEntry(entry.id, { day, meal });
-            toast(`Moved to ${formatDay(day)}`);
+            toast(`${saved ? 'Saved and moved' : 'Moved'} to ${formatDay(day)}`);
             onDone();
           }
           haptic.success();

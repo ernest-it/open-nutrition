@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Alert, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View } from 'react-native';
 import {
   MEASUREMENT_KINDS,
   dayOf,
@@ -14,8 +14,8 @@ import {
 } from '@open-nutrition/shared';
 import { TrendChart } from '../charts';
 import { CalendarModal } from '../components';
-import { usePrefs, useStore, useToday } from '../state';
-import { Button, Card, Chips, Columns, H2, IconButton, NumInput, Screen, T, formatDate, formatDay, haptic, label, styles, useTheme, useToast } from '../ui';
+import { removeWithUndo, usePrefs, useStore, useToday } from '../state';
+import { Button, Card, Chips, Columns, Empty, H2, IconButton, NumInput, Screen, T, formatDay, haptic, label, styles, useTheme, useToast } from '../ui';
 
 /** Same key as the web app: a number in kg (or null), so the goal line syncs. */
 const GOAL_SETTING = 'goalWeightKg';
@@ -39,6 +39,8 @@ export function BodyScreen() {
   const [showAll, setShowAll] = useState(false);
   const goal = store.getSetting<number | null>(GOAL_SETTING, null);
   const [goalDraft, setGoalDraft] = useState<number | null>(goal != null ? +fromKg(goal, unit).toFixed(1) : null);
+  // Follow the stored goal (synced from another device, or a unit change).
+  useEffect(() => setGoalDraft(goal != null ? +fromKg(goal, unit).toFixed(1) : null), [goal, unit]);
 
   const weights = store.measurementsOf('body_weight');
   const cutoff = range === 'all' ? 0 : Date.now() - Number(range) * DAY_MS;
@@ -57,7 +59,13 @@ export function BodyScreen() {
     store.addMeasurement('body_weight', toKg(value, unit), day === today ? Date.now() : noonOf(day));
     setValue(null);
     haptic.success();
-    toast(`Logged ${value} ${unit}`);
+    toast(`Logged ${value} ${unit}${day === today ? '' : ` for ${formatDay(day)}`}`);
+  }
+
+  function deleteWeighIn(id: string, text: string) {
+    const undo = removeWithUndo('measurements', [id]);
+    haptic.light();
+    toast({ message: `Deleted weigh-in · ${text}`, action: { label: 'Undo', onPress: undo } });
   }
 
   const chart = (
@@ -112,14 +120,17 @@ export function BodyScreen() {
       )}
       <View style={[styles.row, { marginTop: 8, flexWrap: 'wrap' }]}>
         <T style={{ flex: 1 }}>Goal weight</T>
-        <NumInput value={goalDraft} onChange={setGoalDraft} accessibilityLabel="Goal weight" style={{ width: 80 }} />
+        <NumInput value={goalDraft} onChange={setGoalDraft} placeholder="—" accessibilityLabel={`Goal weight in ${unit}`} style={{ width: 80 }} />
         <T muted>{unit}</T>
         <Button
           small
-          title="Set"
+          title={goalDraft != null && goalDraft > 0 ? 'Set' : 'Clear'}
+          disabled={(goalDraft != null && goalDraft > 0 ? +toKg(goalDraft, unit).toFixed(2) : null) === (goal != null ? +goal.toFixed(2) : null)}
           onPress={() => {
-            store.setSetting(GOAL_SETTING, goalDraft != null && goalDraft > 0 ? toKg(goalDraft, unit) : null);
+            const next = goalDraft != null && goalDraft > 0 ? toKg(goalDraft, unit) : null;
+            store.setSetting(GOAL_SETTING, next);
             haptic.tap();
+            toast(next != null ? `Goal set to ${goalDraft} ${unit}` : 'Goal cleared');
           }}
         />
       </View>
@@ -151,26 +162,21 @@ export function BodyScreen() {
   const history = (
     <View>
       <H2>Weigh-ins</H2>
-      <Card>
-        {!list.length && <T muted>Your weigh-ins will appear here.</T>}
+      <Card style={{ paddingVertical: 6 }}>
+        {!list.length && <Empty icon="scale" title="No weigh-ins yet" text="Log your weight above; the trend line smooths out day-to-day swings." />}
         {(showAll ? list : list.slice(0, 10)).map((w) => (
-          <View key={w.id} style={[styles.rowBetween, { minHeight: 44 }]}>
+          <View key={w.id} style={[styles.rowBetween, { minHeight: 48 }]}>
+            <T muted style={{ flex: 1 }}>
+              {formatDay(dayOf(w.takenAt))}
+            </T>
             <T bold>
               {show(w.value)} {unit}
             </T>
-            <T small muted style={{ flex: 1, textAlign: 'right' }}>
-              {formatDate(w.takenAt)}
-            </T>
             <IconButton
               icon="trash"
-              label={`Delete weigh-in of ${formatDate(w.takenAt)}`}
+              label={`Delete weigh-in of ${formatDay(dayOf(w.takenAt))}`}
               color={t.muted}
-              onPress={() =>
-                Alert.alert('Delete this weigh-in?', `${show(w.value)} ${unit} · ${formatDate(w.takenAt)}`, [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Delete', style: 'destructive', onPress: () => store.remove('measurements', w.id) },
-                ])
-              }
+              onPress={() => deleteWeighIn(w.id, `${show(w.value)} ${unit}`)}
             />
           </View>
         ))}
@@ -206,6 +212,7 @@ function OtherMeasurements() {
   const t = useTheme();
   const store = useStore();
   const prefs = usePrefs();
+  const toast = useToast();
   const [kind, setKind] = useState<MeasurementKind>('waist');
   const [value, setValue] = useState<number | null>(null);
   const isFat = kind === 'body_fat';
@@ -214,13 +221,14 @@ function OtherMeasurements() {
   const list = [...store.measurementsOf(kind)].reverse();
   const first = list[list.length - 1];
   const last = list[0];
+  const change = first && last && first.id !== last.id ? +(show(last.value) - show(first.value)).toFixed(1) : null;
   return (
     <View>
       <H2>Other measurements</H2>
       <Card>
         <Chips options={OTHER_KINDS.map((k) => ({ value: k, label: label(k) }))} value={kind} onChange={setKind} />
         <View style={[styles.row, { flexWrap: 'wrap' }]}>
-          <NumInput value={value} onChange={setValue} accessibilityLabel={`${label(kind)} in ${unit}`} style={{ width: 96 }} />
+          <NumInput value={value} onChange={setValue} placeholder={last ? String(show(last.value)) : unit} accessibilityLabel={`${label(kind)} in ${unit}`} style={{ width: 96 }} />
           <T muted>{unit}</T>
           <Button
             title="Add"
@@ -231,24 +239,39 @@ function OtherMeasurements() {
               store.addMeasurement(kind, isFat ? value! : toCm(value!, prefs.lengthUnit));
               setValue(null);
               haptic.success();
+              toast(`Logged ${label(kind).toLowerCase()} ${value} ${unit}`);
             }}
           />
         </View>
-        {first && last && first.id !== last.id && (
+        {change != null && first && (
           <T small muted style={{ marginTop: 4 }}>
-            Change since {formatDate(first.takenAt)}: {show(last.value) - show(first.value) > 0 ? '+' : ''}
-            {+(show(last.value) - show(first.value)).toFixed(1)} {unit}
+            Change since {formatDay(dayOf(first.takenAt))}: {change > 0 ? '+' : ''}
+            {change} {unit}
+          </T>
+        )}
+        {!list.length && (
+          <T small muted style={{ paddingVertical: 10 }}>
+            No {label(kind).toLowerCase()} measurements yet.
           </T>
         )}
         {list.slice(0, 12).map((m) => (
-          <View key={m.id} style={[styles.rowBetween, { minHeight: 44 }]}>
-            <T>
-              {show(m.value)} {unit}
-            </T>
-            <T small muted style={{ flex: 1, textAlign: 'right' }}>
+          <View key={m.id} style={[styles.rowBetween, { minHeight: 48 }]}>
+            <T muted style={{ flex: 1 }}>
               {formatDay(dayOf(m.takenAt))}
             </T>
-            <IconButton icon="trash" label="Delete measurement" color={t.muted} onPress={() => store.remove('measurements', m.id)} />
+            <T bold>
+              {show(m.value)} {unit}
+            </T>
+            <IconButton
+              icon="trash"
+              label={`Delete ${label(kind).toLowerCase()} of ${formatDay(dayOf(m.takenAt))}`}
+              color={t.muted}
+              onPress={() => {
+                const undo = removeWithUndo('measurements', [m.id]);
+                haptic.light();
+                toast({ message: `Deleted ${label(kind).toLowerCase()} · ${show(m.value)} ${unit}`, action: { label: 'Undo', onPress: undo } });
+              }}
+            />
           </View>
         ))}
       </Card>

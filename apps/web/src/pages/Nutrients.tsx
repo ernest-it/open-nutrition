@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   addDays,
+  daySchema,
   CORE_NUTRIENTS,
-  formatNutrient,
   N,
   nutrientStatus,
   parseDay,
@@ -11,8 +11,8 @@ import {
   type NutrientDef,
   type NutrientStatus,
 } from '@open-nutrition/shared';
-import { useStore } from '../state';
-import { Empty, Icon, Segmented } from '../ui';
+import { useLoggedDays, useStore } from '../state';
+import { Calendar, Empty, Icon, Modal, nutrientText, Segmented } from '../ui';
 
 type Period = 'day' | 'week' | 'month';
 
@@ -53,10 +53,17 @@ function statusOf(def: NutrientDef, value: number, target: number): NutrientStat
 
 const STATUS_TEXT: Record<NutrientStatus, string> = { under: 'Low', ok: 'On track', over: 'Over' };
 
-export function NutrientsPage() {
+export function NutrientsPage({ day }: { day?: string }) {
   const store = useStore();
+  const today = store.today();
+  const routeDay = day && daySchema.safeParse(day).success ? day : null;
   const [period, setPeriod] = useState<Period>('day');
-  const [anchor, setAnchor] = useState(store.today());
+  const [anchor, setAnchor] = useState(routeDay ?? today);
+  const [calOpen, setCalOpen] = useState(false);
+  const marked = useLoggedDays();
+  useEffect(() => {
+    if (routeDay) setAnchor(routeDay);
+  }, [routeDay]);
   const [open, setOpen] = useState<string | null>(null);
   const range = rangeOf(anchor, period);
   const entries = store.all('diaryEntries').filter((e) => e.date >= range[0] && e.date <= range[1]);
@@ -65,6 +72,7 @@ export function NutrientsPage() {
   const avg = (k: string) => (days ? (total[k] ?? 0) / days : 0);
   const targetDay = range[1] < store.today() ? range[1] : store.today() < range[0] ? range[0] : store.today();
   const targets = store.targetsOn(targetDay)?.nutrients ?? {};
+  const isCurrent = range[0] <= today && today <= range[1];
 
   return (
     <div className="page narrow">
@@ -85,14 +93,34 @@ export function NutrientsPage() {
         <button className="icon-btn" onClick={() => setAnchor(shift(anchor, period, -1))} aria-label="Previous period">
           <Icon name="left" />
         </button>
-        <div className="day-label static">
+        <button className="day-label" onClick={() => setCalOpen(true)} aria-label={`${rangeLabel(range, period)}. Pick a date`} aria-haspopup="dialog">
           <span>{rangeLabel(range, period)}</span>
           <small>{period === 'day' ? `${entries.length} item${entries.length === 1 ? '' : 's'} logged` : `Daily average over ${days} logged day${days === 1 ? '' : 's'}`}</small>
-        </div>
-        <button className="icon-btn" onClick={() => setAnchor(shift(anchor, period, 1))} aria-label="Next period">
+        </button>
+        <button className="icon-btn" onClick={() => setAnchor(shift(anchor, period, 1))} aria-label="Next period" disabled={range[1] >= today}>
           <Icon name="right" />
         </button>
       </div>
+      {!isCurrent && (
+        <p className="center-link">
+          <button className="link small" onClick={() => setAnchor(today)}>
+            Back to {period === 'day' ? 'today' : `this ${period}`}
+          </button>
+        </p>
+      )}
+      {calOpen && (
+        <Modal title="Pick a day" onClose={() => setCalOpen(false)} variant="compact">
+          <Calendar
+            value={anchor}
+            marked={marked}
+            max={today}
+            onPick={(d) => {
+              setAnchor(d);
+              setCalOpen(false);
+            }}
+          />
+        </Modal>
+      )}
       {!Object.keys(targets).length && (
         <a className="card callout" href="#/settings/targets">
           <strong>No targets yet</strong>
@@ -100,7 +128,9 @@ export function NutrientsPage() {
         </a>
       )}
       {!entries.length ? (
-        <Empty>Nothing logged in this period.</Empty>
+        <section className="card">
+          <Empty>Nothing logged {period === 'day' ? 'on this day' : `this ${period}`}. Log some food to see your nutrients here.</Empty>
+        </section>
       ) : (
         <section className="card flush">
           <div className="legend status-legend">
@@ -125,8 +155,8 @@ export function NutrientsPage() {
                       {def.limit && <small className="muted"> limit</small>}
                     </span>
                     <span className="n-value">
-                      {formatNutrient(def.key, v)}
-                      {t > 0 && <small className="muted"> / {formatNutrient(def.key, t)}</small>}
+                      {nutrientText(def.key, v)}
+                      {t > 0 && <small className="muted"> / {nutrientText(def.key, t)}</small>}
                     </span>
                     <span className="n-bar" aria-hidden="true">
                       <span className="n-fill" style={{ width: `${(t > 0 ? pct : 0) * 100}%` }} />
@@ -143,7 +173,7 @@ export function NutrientsPage() {
                             <li key={f.name}>
                               <span>{f.name}</span>
                               <span className="muted nowrap">
-                                {formatNutrient(def.key, f.amount)} · {Math.round(f.share * 100)}%
+                                {nutrientText(def.key, f.amount)} · {Math.round(f.share * 100)}%
                               </span>
                             </li>
                           ))}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, FlatList, View } from 'react-native';
+import { FlatList, View } from 'react-native';
 import {
   CORE_NUTRIENTS,
   N,
@@ -27,6 +27,7 @@ import {
   ListRow,
   NumField,
   NumInput,
+  Notice,
   Screen,
   Segmented,
   Sheet,
@@ -38,8 +39,12 @@ import {
   kcal,
   styles,
   useTheme,
+  useConfirm,
+  useOnce,
   useToast,
 } from '../ui';
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 type FoodsTab = 'mine' | 'favorites' | 'recipes' | 'meals';
 let lastTab: FoodsTab = 'mine';
@@ -119,7 +124,7 @@ export function FoodsScreen() {
           return (
             <ListRow
               title={item.name}
-              subtitle={`${item.ingredients.length} ingredients · ${kcal(per[N.energy])} kcal per portion · ${+item.portions.toFixed(2)} portions`}
+              subtitle={`${plural(item.ingredients.length, 'ingredient')} · ${kcal(per[N.energy])} kcal per portion · makes ${+item.portions.toFixed(2)}`}
               onPress={() => nav.push({ name: 'recipeEdit', id: item.id })}
             />
           );
@@ -139,7 +144,7 @@ export function FoodsScreen() {
         return (
           <ListRow
             title={item.name}
-            subtitle={`${item.items.length} items · ${kcal(total[N.energy])} kcal`}
+            subtitle={`${plural(item.items.length, 'item')} · ${kcal(total[N.energy])} kcal`}
             onPress={() => nav.push({ name: 'savedMeal', id: item.id })}
           />
         );
@@ -203,7 +208,29 @@ export function FoodEditor({
   const defs = (all ? NUTRIENTS : CORE_NUTRIENTS).filter((d) => d.key !== N.energy);
   const valid = name.trim().length > 0 && values[N.energy] != null && (basis === '100g' || !!basisServing);
 
+  const confirm = useConfirm();
+  const once = useOnce();
+
+  async function remove() {
+    if (!existing) return;
+    const ok = await confirm({
+      title: `Delete “${existing.name}”?`,
+      message: 'It disappears from search and your foods. Past diary entries keep their values.',
+      confirmLabel: 'Delete food',
+      destructive: true,
+    });
+    if (!ok) return;
+    store.remove('foods', existing.id);
+    haptic.warn();
+    toast('Food deleted');
+    onDeleted?.();
+  }
+
   function save() {
+    once.run(() => saveNow());
+  }
+
+  function saveNow() {
     const cleanServings = servings.filter((sv) => sv.label.trim() && sv.grams > 0).map((sv) => ({ label: sv.label.trim().slice(0, 100), grams: sv.grams }));
     const food = store.upsertFood({
       id: existing?.id,
@@ -223,18 +250,13 @@ export function FoodEditor({
 
   return (
     <View>
-      <T bold style={{ fontSize: 20, marginBottom: 4 }}>
-        {existing ? 'Edit food' : 'New food'}
-      </T>
       {existing && existing.source !== 'custom' && (
-        <T small muted>
-          Source: {sourceLabel(existing)}. Your edits apply to your copy only; past diary entries keep their values.
-        </T>
+        <Notice>{`Source: ${sourceLabel(existing)}. Your edits apply to your copy only; past diary entries keep their values.`}</Notice>
       )}
       <Card>
-        <Input value={name} onChangeText={setName} placeholder="Name (required)" accessibilityLabel="Name" />
-        <Input value={brand} onChangeText={setBrand} placeholder="Brand (optional)" accessibilityLabel="Brand" />
-        <Input value={code} onChangeText={setCode} placeholder="Barcode (optional)" keyboardType="number-pad" accessibilityLabel="Barcode" />
+        <Input label="Name" value={name} onChangeText={setName} placeholder="e.g. Greek yoghurt, plain" maxLength={300} />
+        <Input label="Brand (optional)" value={brand} onChangeText={setBrand} placeholder="e.g. Hillside Dairy" maxLength={200} />
+        <Input label="Barcode (optional)" value={code} onChangeText={setCode} placeholder="Digits under the barcode" keyboardType="number-pad" maxLength={14} />
         <Toggle label="Favourite" value={favorite} onChange={setFavorite} />
       </Card>
       <H2
@@ -296,26 +318,13 @@ export function FoodEditor({
           Leave a field empty if the label doesn’t list it (it counts as unknown, not zero).
         </T>
       </Card>
-      <Button title={existing ? 'Save food' : 'Create food'} variant="primary" onPress={save} disabled={!valid} />
-      {existing && (
-        <Button
-          title="Delete food"
-          variant="danger"
-          onPress={() =>
-            Alert.alert('Delete this food?', 'Past diary entries keep their values.', [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Delete',
-                style: 'destructive',
-                onPress: () => {
-                  store.remove('foods', existing.id);
-                  onDeleted?.();
-                },
-              },
-            ])
-          }
-        />
+      <Button title={existing ? 'Save food' : 'Create food'} variant="primary" icon="check" onPress={save} disabled={!valid} />
+      {!valid && (
+        <T small muted style={{ textAlign: 'center' }}>
+          {!name.trim() ? 'Add a name to save this food.' : values[N.energy] == null ? 'Add the calories to save this food.' : 'Enter the serving’s weight in grams.'}
+        </T>
       )}
+      {existing && <Button title="Delete food" icon="trash" variant="danger" onPress={() => void remove()} />}
     </View>
   );
 }
@@ -326,6 +335,8 @@ export function RecipeEditScreen({ id, onDone }: { id?: string; onDone: () => vo
   const t = useTheme();
   const store = useStore();
   const toast = useToast();
+  const confirm = useConfirm();
+  const once = useOnce();
   const existing = id ? store.get('recipes', id) : undefined;
   const [name, setName] = useState(existing?.name ?? '');
   const [portions, setPortions] = useState<number | null>(existing?.portions ?? 4);
@@ -345,28 +356,57 @@ export function RecipeEditScreen({ id, onDone }: { id?: string; onDone: () => vo
     setIngredients((list) => [...list, { foodId: f.id.startsWith('usda:') ? null : f.id, name: f.name.slice(0, 300), grams: a.grams, nutrients: f.nutrients }]);
     setPicking(false);
     haptic.tap();
+    toast(`Added ${f.name.split(',')[0]}`);
+  }
+
+  function removeIngredient(i: number) {
+    const removed = ingredients[i];
+    if (!removed) return;
+    setIngredients((list) => list.filter((_, j) => j !== i));
+    haptic.light();
+    toast({
+      message: `Removed ${removed.name.split(',')[0]}`,
+      action: { label: 'Undo', onPress: () => setIngredients((list) => [...list.slice(0, i), removed, ...list.slice(i)]) },
+    });
   }
 
   function save() {
-    const data = {
-      name: name.trim().slice(0, 300),
-      ingredients,
-      portions: portions!,
-      cookedGrams: cooked && cooked > 0 ? cooked : null,
-      notes: notes.trim() || null,
-      favorite,
-    };
-    if (existing) store.update('recipes', existing.id, data);
-    else store.insert('recipes', data);
-    haptic.success();
-    toast(existing ? 'Recipe saved' : 'Recipe created');
+    once.run(() => {
+      const data = {
+        name: name.trim().slice(0, 300),
+        ingredients,
+        portions: portions!,
+        cookedGrams: cooked && cooked > 0 ? cooked : null,
+        notes: notes.trim() || null,
+        favorite,
+      };
+      if (existing) store.update('recipes', existing.id, data);
+      else store.insert('recipes', data);
+      haptic.success();
+      toast(existing ? 'Recipe saved' : 'Recipe created');
+      onDone();
+    });
+  }
+
+  async function remove() {
+    if (!existing) return;
+    const ok = await confirm({
+      title: `Delete “${existing.name}”?`,
+      message: 'Past diary entries keep their values.',
+      confirmLabel: 'Delete recipe',
+      destructive: true,
+    });
+    if (!ok) return;
+    store.remove('recipes', existing.id);
+    haptic.warn();
+    toast('Recipe deleted');
     onDone();
   }
 
   return (
     <Screen title={existing ? 'Edit recipe' : 'New recipe'}>
       <Card>
-        <Input value={name} onChangeText={setName} placeholder="Recipe name" accessibilityLabel="Recipe name" />
+        <Input label="Recipe name" value={name} onChangeText={setName} placeholder="e.g. Lentil soup" maxLength={300} />
         <NumField label="Portions it makes" value={portions} onChange={setPortions} />
         <NumField label="Cooked weight (optional)" unit="g" value={cooked} onChange={setCooked} />
         <T small muted>
@@ -376,10 +416,10 @@ export function RecipeEditScreen({ id, onDone }: { id?: string; onDone: () => vo
       </Card>
       <H2 right={<Button small icon="plus" title="Add ingredient" variant="primary" onPress={() => setPicking(true)} />}>Ingredients</H2>
       <Card>
-        {!ingredients.length && <T muted>No ingredients yet.</T>}
+        {!ingredients.length && <Empty icon="food" title="No ingredients yet" text="Add each ingredient with the amount that goes into the whole dish." />}
         {ingredients.map((ing, i) => (
-          <View key={i} style={[styles.row, { paddingVertical: 4 }]}>
-            <View style={{ flex: 1 }}>
+          <View key={`${i}-${ing.name}`} style={[styles.row, { paddingVertical: 4 }]}>
+            <View style={{ flex: 1, minWidth: 0 }}>
               <T lines={2}>{ing.name}</T>
               <T small muted>
                 {kcal(scaleNutrients(ing.nutrients, ing.grams)[N.energy])} kcal
@@ -392,7 +432,7 @@ export function RecipeEditScreen({ id, onDone }: { id?: string; onDone: () => vo
               style={{ width: 70 }}
             />
             <T muted>g</T>
-            <IconButton icon="trash" label={`Remove ${ing.name}`} color={t.danger} onPress={() => setIngredients((list) => list.filter((_, j) => j !== i))} />
+            <IconButton icon="trash" label={`Remove ${ing.name}`} color={t.muted} onPress={() => removeIngredient(i)} />
           </View>
         ))}
       </Card>
@@ -405,27 +445,14 @@ export function RecipeEditScreen({ id, onDone }: { id?: string; onDone: () => vo
           </T>
         </Card>
       )}
-      <Input value={notes} onChangeText={setNotes} placeholder="Notes (optional)" multiline style={{ minHeight: 70, textAlignVertical: 'top' }} accessibilityLabel="Notes" />
-      <Button title="Save recipe" variant="primary" onPress={save} disabled={!valid} />
-      {existing && (
-        <Button
-          title="Delete recipe"
-          variant="danger"
-          onPress={() =>
-            Alert.alert('Delete this recipe?', 'Past diary entries keep their values.', [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Delete',
-                style: 'destructive',
-                onPress: () => {
-                  store.remove('recipes', existing.id);
-                  onDone();
-                },
-              },
-            ])
-          }
-        />
+      <Input label="Notes (optional)" value={notes} onChangeText={setNotes} placeholder="Method, tips, where it’s from…" multiline style={{ minHeight: 80, textAlignVertical: 'top' }} />
+      <Button title="Save recipe" variant="primary" icon="check" onPress={save} disabled={!valid} />
+      {!valid && (
+        <T small muted style={{ textAlign: 'center' }}>
+          {!name.trim() ? 'Add a name and at least one ingredient to save.' : !ingredients.length ? 'Add at least one ingredient to save.' : 'Enter how many portions it makes.'}
+        </T>
       )}
+      {existing && <Button title="Delete recipe" icon="trash" variant="danger" onPress={() => void remove()} />}
       <Sheet visible={picking} onClose={() => setPicking(false)}>
         <SheetHeader title="Add ingredient" onClose={() => setPicking(false)} />
         <FoodSearch autoFocus onPick={addIngredient} />
@@ -439,59 +466,68 @@ export function RecipeEditScreen({ id, onDone }: { id?: string; onDone: () => vo
 export function SavedMealScreen({ id, onDone }: { id: string; onDone: () => void }) {
   const t = useTheme();
   const store = useStore();
+  const toast = useToast();
+  const confirm = useConfirm();
   const m = store.get('savedMeals', id);
   const [name, setName] = useState(m?.name ?? '');
-  if (!m) return <Empty title="This saved meal was deleted." />;
+  if (!m) return <Empty icon="bookmark" title="This saved meal was deleted." />;
   const total = sumNutrients(m.items.map((i) => i.nutrients));
+
+  const rename = () => {
+    const next = name.trim().slice(0, 200);
+    if (!next) return setName(m.name);
+    if (next !== m.name) {
+      store.update('savedMeals', m.id, { name: next });
+      toast('Name saved');
+    }
+  };
+
+  const removeItem = (i: number) => {
+    const before = m.items;
+    const removed = before[i];
+    store.update('savedMeals', m.id, { items: before.filter((_, j) => j !== i) });
+    haptic.light();
+    toast({ message: `Removed ${removed?.name.split(',')[0] ?? 'item'}`, action: { label: 'Undo', onPress: () => store.update('savedMeals', m.id, { items: before }) } });
+  };
+
+  async function remove() {
+    const ok = await confirm({
+      title: `Delete “${m!.name}”?`,
+      message: 'Entries you already logged from it stay in your diary.',
+      confirmLabel: 'Delete meal',
+      destructive: true,
+    });
+    if (!ok) return;
+    store.remove('savedMeals', m!.id);
+    haptic.warn();
+    toast('Saved meal deleted');
+    onDone();
+  }
+
   return (
     <Screen title="Saved meal">
       <Card>
-        <Input
-          value={name}
-          onChangeText={setName}
-          onEndEditing={() => name.trim() && name.trim() !== m.name && store.update('savedMeals', m.id, { name: name.trim().slice(0, 200) })}
-          placeholder="Name"
-          accessibilityLabel="Saved meal name"
-        />
-        <T bold style={{ marginTop: 6 }}>
-          {kcal(total[N.energy])} kcal
-        </T>
-        <T muted>{macroLine(total)}</T>
+        <Input label="Name" value={name} onChangeText={setName} onEndEditing={rename} onSubmitEditing={rename} returnKeyType="done" placeholder="e.g. Usual breakfast" maxLength={200} />
+        <View style={[styles.rowBetween, { flexWrap: 'wrap', marginTop: 8 }]}>
+          <T bold style={{ fontSize: 20 }}>
+            {kcal(total[N.energy])} kcal
+          </T>
+          <T muted>{macroLine(total)}</T>
+        </View>
       </Card>
-      <Card>
+      <H2>{plural(m.items.length, 'item')}</H2>
+      <Card style={{ paddingVertical: 4 }}>
         {m.items.map((it, i) => (
-          <View key={i} style={[styles.row, { paddingVertical: 4 }]}>
+          <View key={`${i}-${it.name}`} style={[styles.row, { minHeight: 48 }]}>
             <T style={{ flex: 1 }} lines={2}>
               {it.name}
             </T>
-            <T muted>{kcal(it.nutrients[N.energy])}</T>
-            <IconButton
-              icon="trash"
-              label={`Remove ${it.name}`}
-              color={t.danger}
-              disabled={m.items.length <= 1}
-              onPress={() => store.update('savedMeals', m.id, { items: m.items.filter((_, j) => j !== i) })}
-            />
+            <T muted>{kcal(it.nutrients[N.energy])} kcal</T>
+            <IconButton icon="trash" label={`Remove ${it.name}`} color={t.muted} disabled={m.items.length <= 1} onPress={() => removeItem(i)} />
           </View>
         ))}
       </Card>
-      <Button
-        title="Delete saved meal"
-        variant="danger"
-        onPress={() =>
-          Alert.alert('Delete this saved meal?', undefined, [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Delete',
-              style: 'destructive',
-              onPress: () => {
-                store.remove('savedMeals', m.id);
-                onDone();
-              },
-            },
-          ])
-        }
-      />
+      <Button title="Delete saved meal" icon="trash" variant="danger" onPress={() => void remove()} />
     </Screen>
   );
 }

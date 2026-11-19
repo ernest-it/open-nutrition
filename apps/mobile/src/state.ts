@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, useSyncExternalStore } 
 import { AppState } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import Storage from 'expo-sqlite/kv-store';
-import { NutritionStore, SETTING_PREFS, todayLocal, type Prefs, type Snapshot, type StorageAdapter } from '@open-nutrition/shared';
+import { NutritionStore, SETTING_PREFS, todayLocal, type CollectionName, type Prefs, type Snapshot, type StorageAdapter } from '@open-nutrition/shared';
 
 /** Snapshot persisted in on-device SQLite (no size limit, unlike AsyncStorage on Android). */
 class SqliteKvStorage implements StorageAdapter {
@@ -172,4 +172,18 @@ export function normalizeServerUrl(input: string): string {
     u = `${local ? 'http' : 'https'}://${u}`;
   }
   return u;
+}
+
+/**
+ * Undo a delete. Deletes are soft (`deletedAt`) and sync is last-write-wins on `updatedAt`, so
+ * clearing `deletedAt` with a fresh update restores the row here and on the server.
+ */
+export function restoreRows(collection: CollectionName, ids: string[]) {
+  for (const id of ids) store.update(collection, id, { deletedAt: null } as never);
+}
+
+/** Delete rows and return an undo function (for "Deleted · Undo" snackbars). */
+export function removeWithUndo(collection: CollectionName, ids: string[]): () => void {
+  for (const id of ids) store.remove(collection, id);
+  return () => restoreRows(collection, ids);
 }

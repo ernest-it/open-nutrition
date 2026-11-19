@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Linking, ScrollView, StyleSheet, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Image, Linking, ScrollView, StyleSheet, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import {
   AI_MODELS,
@@ -22,6 +22,7 @@ import { useAddNav, useNav } from '../nav';
 import { setPrefs, useAccount, usePrefs, useStore } from '../state';
 import {
   Badge,
+  Banner,
   Button,
   Card,
   Chips,
@@ -36,10 +37,14 @@ import {
   haptic,
   kcal,
   styles,
+  useConfirm,
   useTheme,
 } from '../ui';
 
 type Phase = 'compose' | 'sending' | 'review';
+
+/** "Claude Opus 5.5" instead of a raw model id. */
+const modelName = (id: string) => AI_MODELS.find((m) => m.id === id)?.label.split(' — ')[0] ?? id;
 
 export function AiLogScreen({ onBack }: { onBack?: () => void }) {
   const t = useTheme();
@@ -49,12 +54,13 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
   const prefs = usePrefs();
   const account = useAccount();
   const { wide } = useLayout();
+  const confirm = useConfirm();
 
   const [phase, setPhase] = useState<Phase>('compose');
   const [image, setImage] = useState<PreparedImage | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [description, setDescription] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ title: string; message: string; retry?: boolean } | null>(null);
   const [result, setResult] = useState<EstimateResult | null>(null);
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [swapIndex, setSwapIndex] = useState<number | null>(null);
@@ -76,7 +82,7 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
       if (source === 'camera') {
         const perm = await ImagePicker.requestCameraPermissionsAsync();
         if (!perm.granted) {
-          setError('Camera access is off. Allow it in system settings, or choose a photo from your library.');
+          setError({ title: 'Camera access is off', message: 'Allow it in system settings, or choose a photo from your library.' });
           return;
         }
       }
@@ -87,15 +93,25 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
       setPreparing(true);
       setImage(await prepareImage(a.uri, a.width, a.height));
     } catch (e) {
-      setError(`Could not use that photo: ${(e as Error).message}`);
+      setError({ title: 'Could not use that photo', message: (e as Error).message });
     } finally {
       setPreparing(false);
     }
   }
 
+  // Each request gets a number; cancelling (or leaving) bumps it so a late answer is ignored.
+  const request = useRef(0);
+  useEffect(
+    () => () => {
+      request.current++;
+    },
+    [],
+  );
+
   async function send() {
     setError(null);
     setPhase('sending');
+    const my = ++request.current;
     try {
       const r = await requestEstimate(account, {
         model: modelInfo?.id ?? prefs.aiModel,
@@ -104,19 +120,28 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
         description: description.trim() || null,
       });
       const resolved = await resolveEstimate(r.estimate, (q) => searchFoods(store, q, 12));
+      if (my !== request.current) return;
       setResult(r);
       setItems(resolved);
       setPhase('review');
       haptic.success();
     } catch (e) {
-      setError(e instanceof AiError ? e.message : (e as Error).message);
+      if (my !== request.current) return;
+      setError({ title: 'The estimate didn’t work', message: e instanceof AiError ? e.message : (e as Error).message, retry: true });
       setPhase('compose');
       haptic.warn();
     }
   }
 
+  function cancelSend() {
+    request.current++;
+    setPhase('compose');
+  }
+
+  const added = useRef(false);
   function addAll() {
-    if (!result) return;
+    if (!result || added.current) return;
+    added.current = true;
     const kept = items.filter((i) => i.grams > 0);
     const row = store.recordAiEstimate({
       date: nav.day,
@@ -129,39 +154,58 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
     });
-    for (const it of kept) store.logFood({ day: nav.day, meal: nav.meal, ...reviewItemToLog(it), aiEstimateId: row.id });
-    nav.close(`Added ${kept.length} item${kept.length === 1 ? '' : 's'} to ${MEAL_LABELS[nav.meal].toLowerCase()}`);
+    const logged = kept.map((it) => store.logFood({ day: nav.day, meal: nav.meal, ...reviewItemToLog(it), aiEstimateId: row.id }));
+    nav.close(`Added ${kept.length} item${kept.length === 1 ? '' : 's'} to ${MEAL_LABELS[nav.meal].toLowerCase()}`, () =>
+      logged.forEach((e) => store.remove('diaryEntries', e.id)),
+    );
   }
 
-  function discard() {
-    Alert.alert('Discard this estimate?', 'Nothing will be added to your diary.', [
-      { text: 'Keep reviewing', style: 'cancel' },
-      {
-        text: 'Discard',
-        style: 'destructive',
-        onPress: () => {
-          if (result) {
-            store.recordAiEstimate({
-              date: nav.day,
-              meal: nav.meal,
-              photoHash: image?.sha256 ?? null,
-              description: description.trim() || null,
-              model: result.model,
-              response: result.estimate,
-              accepted: null,
-              inputTokens: result.inputTokens,
-              outputTokens: result.outputTokens,
-            });
-          }
-          setPhase('compose');
-          setResult(null);
-          setItems([]);
-        },
-      },
-    ]);
+  /** Ask before throwing away a reviewed estimate (it cost money and time). Resolves true if discarded. */
+  async function discard(): Promise<boolean> {
+    const ok = await confirm({
+      title: 'Discard this estimate?',
+      message: 'Nothing will be added to your diary.',
+      confirmLabel: 'Discard',
+      cancelLabel: 'Keep reviewing',
+      destructive: true,
+    });
+    if (!ok) return false;
+    if (result) {
+      store.recordAiEstimate({
+        date: nav.day,
+        meal: nav.meal,
+        photoHash: image?.sha256 ?? null,
+        description: description.trim() || null,
+        model: result.model,
+        response: result.estimate,
+        accepted: null,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+      });
+    }
+    setPhase('compose');
+    setResult(null);
+    setItems([]);
+    return true;
   }
 
-  const header = <SheetHeader title={`Photo / describe · ${MEAL_LABELS[nav.meal]}`} onBack={phase === 'review' ? discard : onBack} onClose={() => nav.close()} />;
+  // In review, hardware back asks before discarding instead of silently dropping the estimate.
+  const reviewing = phase === 'review';
+  const backRef = useRef<() => void>(() => {});
+  backRef.current = () => (swapIndex != null ? setSwapIndex(null) : void discard());
+  useEffect(() => {
+    if (!reviewing) return;
+    nav.setBackGuard(() => backRef.current());
+    return () => nav.setBackGuard(null);
+  }, [reviewing, nav]);
+
+  const header = (
+    <SheetHeader
+      title={`Photo / describe · ${MEAL_LABELS[nav.meal]}`}
+      onBack={reviewing ? () => void discard() : onBack}
+      onClose={reviewing ? () => void discard().then((ok) => ok && nav.close()) : () => nav.close()}
+    />
+  );
 
   // ---- swap an item for a database food ----
   if (swapIndex != null && items[swapIndex]) {
@@ -253,9 +297,10 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 }}>
           <ActivityIndicator size="large" color={t.accent} />
           <T bold>Estimating your meal…</T>
-          <T small muted style={{ textAlign: 'center' }}>
+          <T small muted style={{ textAlign: 'center', maxWidth: 360 }}>
             This usually takes 5–20 seconds. Portions are then matched against the USDA database.
           </T>
+          <Button title="Cancel" variant="ghost" onPress={cancelSend} />
         </View>
       </View>
     );
@@ -297,7 +342,7 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
           <T muted>{macroLine(totals)}</T>
           {result.costUsd != null && (
             <T small muted style={{ marginTop: 4 }}>
-              This estimate cost {formatCost(result.costUsd)} ({result.model}).
+              This estimate cost {formatCost(result.costUsd)} ({modelName(result.model)}).
             </T>
           )}
         </Card>
@@ -398,11 +443,20 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
           </T>
         </Card>
         {error && (
-          <Notice tone="warn">
-            <T small>{error}</T>
-          </Notice>
+          <Banner
+            tone="error"
+            title={error.title}
+            message={error.message}
+            onDismiss={() => setError(null)}
+            action={error.retry && (image || description.trim()) ? { label: 'Try again', onPress: () => void send() } : undefined}
+          />
         )}
         <Button title="Estimate" variant="primary" icon="sparkle" disabled={(!image && !description.trim()) || preparing} onPress={() => void send()} />
+        {!image && !description.trim() && (
+          <T small muted style={{ textAlign: 'center' }}>
+            Add a photo or a description to get an estimate.
+          </T>
+        )}
       </ScrollView>
     </View>
   );

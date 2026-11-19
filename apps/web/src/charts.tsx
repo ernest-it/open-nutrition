@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useElementWidth } from './ui';
+import { fmt, useElementWidth } from './ui';
 
 /** Calorie ring: sized from its container's measured width (capped), never fixed pixels. */
 export function CalorieRing({ eaten, budget, max = 240 }: { eaten: number; budget: number; max?: number }) {
@@ -111,7 +111,7 @@ export function WeightChart({ points, goal, unit }: { points: WeightPoint[]; goa
         viewBox={`0 0 ${W} ${H}`}
         className="chart"
         role="img"
-        aria-label="Weight trend chart"
+        aria-label={`Weight trend chart: ${points.length} weigh-ins from ${fmtDate(x0)} to ${fmtDate(x1)}, latest 7-day average ${fmt(points[points.length - 1]!.trend, 1, true)} ${unit}`}
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
@@ -119,7 +119,7 @@ export function WeightChart({ points, goal, unit }: { points: WeightPoint[]; goa
           <g key={i}>
             <line x1={padL} x2={W - padR} y1={sy(t)} y2={sy(t)} className="grid" />
             <text x={padL - 6} y={sy(t) + 4} textAnchor="end" className="tick">
-              {+t.toFixed(1)}
+              {fmt(t, 1)}
             </text>
           </g>
         ))}
@@ -143,9 +143,9 @@ export function WeightChart({ points, goal, unit }: { points: WeightPoint[]; goa
       </svg>
       {hp && (
         <div className="tooltip" style={{ left: Math.min(Math.max(sx(hp.takenAt), 70), W - 70) }}>
-          <strong>{new Date(hp.takenAt).toLocaleDateString()}</strong>
+          <strong>{new Date(hp.takenAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</strong>
           <span>
-            {+hp.value.toFixed(1)} {unit} · avg {+hp.trend.toFixed(1)}
+            {fmt(hp.value, 1, true)} {unit} · 7-day avg {fmt(hp.trend, 1, true)}
           </span>
         </div>
       )}

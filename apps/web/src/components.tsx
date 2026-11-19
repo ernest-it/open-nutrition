@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   addDays,
   multiplyNutrients,
@@ -10,9 +10,10 @@ import {
   type Meal,
   type NutrientMap,
 } from '@open-nutrition/shared';
-import { store, useStore } from './state';
+import { removeRows, restoreRows, store, useLoggedDays, useStore } from './state';
 import { useAddFood } from './addFood';
-import { grams, Icon, kcal, MEAL_LABEL, MealSelect, Modal, NumberInput, round } from './ui';
+import { useToast } from './feedback';
+import { DateField, formatDay, grams, Icon, kcal, MEAL_LABEL, MealSelect, Modal, NumberInput, round } from './ui';
 
 export function MacroLine({ n, className = '' }: { n: NutrientMap; className?: string }) {
   return (
@@ -33,10 +34,75 @@ export const SOURCE_LABEL: Record<string, string> = {
   recipe: 'Recipe',
 };
 
+export const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
+/** "1.5 × 1 cup (237 g)", "150 g", or the source for quick adds. Never repeats the grams ("100 g (100 g)"). */
 export function entryAmount(e: DiaryEntry): string {
-  if (e.servingLabel) return `${e.quantity === 1 ? '' : `${round(e.quantity, 2)} × `}${e.servingLabel}${e.grams != null ? ` (${grams(e.grams)} g)` : ''}`;
+  if (e.servingLabel) {
+    const g = e.grams != null ? `${grams(e.grams)} g` : null;
+    const showGrams = g != null && !e.servingLabel.includes(g) && !/^\s*[\d.,]+\s*g\s*$/i.test(e.servingLabel);
+    return `${e.quantity === 1 ? '' : `${round(e.quantity, 2)} × `}${e.servingLabel}${showGrams ? ` (${g})` : ''}`;
+  }
   if (e.grams != null) return `${grams(e.grams)} g`;
   return SOURCE_LABEL[e.source] ?? '';
+}
+
+/** Toast after removing diary entries, with Undo. */
+export function useEntryUndo() {
+  const toast = useToast();
+  return (ids: string[], message: string) => toast({ message, action: { label: 'Undo', onClick: () => restoreRows('diaryEntries', ids) } });
+}
+
+/** Toast after adding diary entries (copies), with Undo that removes them again. */
+export function useAddedUndo() {
+  const toast = useToast();
+  return (ids: string[], message: string) =>
+    toast({ message, tone: 'success', action: ids.length ? { label: 'Undo', onClick: () => removeRows('diaryEntries', ids) } : undefined });
+}
+
+// ---------------------------------------------------------------------------
+// Dropdown menu: closes on outside click / Esc / selection; arrow keys move between items.
+// ---------------------------------------------------------------------------
+
+export function MenuButton({ label, children }: { label: string; children: (close: () => void) => React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const close = (refocus = true) => {
+    setOpen(false);
+    if (refocus) btn.current?.focus();
+  };
+  useEffect(() => {
+    if (!open) return;
+    wrap.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
+    const onDown = (e: PointerEvent) => !wrap.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
+  function onKey(e: React.KeyboardEvent) {
+    const items = [...(wrap.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation();
+      close();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+    } else if (e.key === 'Tab') setOpen(false);
+  }
+  return (
+    <div className="menu-wrap" ref={wrap} onKeyDown={open ? onKey : undefined}>
+      <button ref={btn} className="icon-btn" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Icon name="more" />
+      </button>
+      {open && (
+        <div className="menu" role="menu" aria-label={label}>
+          {children(() => close(false))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -45,15 +111,24 @@ export function entryAmount(e: DiaryEntry): string {
 
 export function MealSection({ day, meal, entries, tools = true }: { day: string; meal: Meal; entries: DiaryEntry[]; tools?: boolean }) {
   const openAdd = useAddFood();
+  const added = useAddedUndo();
   const [editing, setEditing] = useState<DiaryEntry | null>(null);
-  const [menu, setMenu] = useState(false);
   const [copyTo, setCopyTo] = useState(false);
   const [saveAs, setSaveAs] = useState(false);
   const total = entries.reduce((a, e) => a + (e.nutrients[N.energy] ?? 0), 0);
   const yesterday = store.entriesOn(addDays(day, -1)).filter((e) => e.meal === meal);
+  const mealName = MEAL_LABEL[meal].toLowerCase();
+
+  function copyYesterday() {
+    const rows = store.copyMealFromYesterday(day, meal);
+    added(
+      rows.map((r) => r.id),
+      `Copied ${plural(rows.length, 'item')} from yesterday's ${mealName}.`,
+    );
+  }
 
   return (
-    <section className="meal card">
+    <section className="meal card" aria-label={MEAL_LABEL[meal]}>
       <header className="meal-head">
         <div className="meal-title">
           <h3>{MEAL_LABEL[meal]}</h3>
@@ -61,29 +136,26 @@ export function MealSection({ day, meal, entries, tools = true }: { day: string;
         </div>
         <div className="meal-actions">
           {tools && (
-            <div className="menu-wrap">
-              <button className="icon-btn" aria-label={`${MEAL_LABEL[meal]} options`} aria-expanded={menu} onClick={() => setMenu(!menu)}>
-                <Icon name="more" />
-              </button>
-              {menu && (
-                <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>
+            <MenuButton label={`${MEAL_LABEL[meal]} options`}>
+              {(close) => (
+                <>
                   <button
                     role="menuitem"
                     disabled={!yesterday.length}
                     onClick={() => {
-                      store.copyMealFromYesterday(day, meal);
-                      setMenu(false);
+                      close();
+                      copyYesterday();
                     }}
                   >
-                    <Icon name="history" size={18} /> Copy yesterday's {MEAL_LABEL[meal].toLowerCase()}
+                    <Icon name="history" size={18} /> Copy yesterday's {mealName}
                     {yesterday.length ? ` (${yesterday.length})` : ''}
                   </button>
                   <button
                     role="menuitem"
                     disabled={!entries.length}
                     onClick={() => {
+                      close();
                       setCopyTo(true);
-                      setMenu(false);
                     }}
                   >
                     <Icon name="copy" size={18} /> Copy this meal to…
@@ -92,15 +164,15 @@ export function MealSection({ day, meal, entries, tools = true }: { day: string;
                     role="menuitem"
                     disabled={!entries.length}
                     onClick={() => {
+                      close();
                       setSaveAs(true);
-                      setMenu(false);
                     }}
                   >
                     <Icon name="bowl" size={18} /> Save as a meal
                   </button>
-                </div>
+                </>
               )}
-            </div>
+            </MenuButton>
           )}
           <button className="icon-btn accent" aria-label={`Add to ${MEAL_LABEL[meal]}`} onClick={() => openAdd({ day, meal })}>
             <Icon name="plus" />
@@ -111,7 +183,7 @@ export function MealSection({ day, meal, entries, tools = true }: { day: string;
         <ul className="entries">
           {entries.map((e) => (
             <li key={e.id}>
-              <button className="entry" onClick={() => setEditing(e)}>
+              <button className="entry" onClick={() => setEditing(e)} aria-label={`${e.name}, ${entryAmount(e)}, ${kcal(e.nutrients[N.energy])} kcal. Edit`}>
                 <span className="entry-main">
                   <span className="entry-name">{e.name}</span>
                   <span className="entry-sub">
@@ -126,8 +198,8 @@ export function MealSection({ day, meal, entries, tools = true }: { day: string;
         </ul>
       )}
       {!entries.length && yesterday.length > 0 && tools && (
-        <button className="link small pad-x" onClick={() => store.copyMealFromYesterday(day, meal)}>
-          Copy yesterday's {MEAL_LABEL[meal].toLowerCase()} ({yesterday.length} item{yesterday.length > 1 ? 's' : ''})
+        <button className="link small pad-x" onClick={copyYesterday}>
+          <Icon name="history" size={16} /> Copy yesterday's {mealName} ({plural(yesterday.length, 'item')})
         </button>
       )}
       {editing && <EntryEditor entry={editing} onClose={() => setEditing(null)} />}
@@ -140,61 +212,82 @@ export function MealSection({ day, meal, entries, tools = true }: { day: string;
 function CopyMealDialog({ day, meal, ids, onClose }: { day: string; meal: Meal; ids: string[]; onClose: () => void }) {
   const [to, setTo] = useState(addDays(day, 1));
   const [toMeal, setToMeal] = useState<Meal>(meal);
+  const added = useAddedUndo();
+  const marked = useLoggedDays();
+  const same = to === day && toMeal === meal;
   return (
     <Modal
       title={`Copy ${MEAL_LABEL[meal].toLowerCase()}`}
+      variant="compact"
       onClose={onClose}
       footer={
-        <button
-          className="primary"
-          disabled={!to}
-          onClick={() => {
-            store.copyEntries(ids, { day: to, meal: toMeal });
-            onClose();
-          }}
-        >
-          Copy {ids.length} item{ids.length > 1 ? 's' : ''}
-        </button>
+        <>
+          <span className="spacer" />
+          <button onClick={onClose}>Cancel</button>
+          <button
+            className="primary"
+            disabled={same}
+            onClick={() => {
+              const rows = store.copyEntries(ids, { day: to, meal: toMeal });
+              added(
+                rows.map((r) => r.id),
+                `Copied ${plural(rows.length, 'item')} to ${MEAL_LABEL[toMeal].toLowerCase()}, ${formatDay(to, true)}.`,
+              );
+              onClose();
+            }}
+          >
+            Copy {plural(ids.length, 'item')}
+          </button>
+        </>
       }
     >
       <div className="form-grid">
         <label>
           To day
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+          <DateField value={to} onChange={setTo} marked={marked} />
         </label>
         <label>
           Meal
           <MealSelect value={toMeal} onChange={setToMeal} />
         </label>
       </div>
+      {same && <p className="muted small">Pick a different day or meal.</p>}
     </Modal>
   );
 }
 
 function SaveMealDialog({ meal, ids, onClose }: { meal: Meal; ids: string[]; onClose: () => void }) {
   const [name, setName] = useState(`My ${MEAL_LABEL[meal].toLowerCase()}`);
+  const toast = useToast();
+  function save(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!name.trim()) return;
+    const m = store.saveMealFromEntries(name, ids);
+    toast({ message: `Saved “${m.name}”. Find it under Saved meals when you add food.`, tone: 'success' });
+    onClose();
+  }
   return (
     <Modal
       title="Save as a meal"
+      variant="compact"
       onClose={onClose}
       footer={
-        <button
-          className="primary"
-          disabled={!name.trim()}
-          onClick={() => {
-            store.saveMealFromEntries(name, ids);
-            onClose();
-          }}
-        >
-          Save
-        </button>
+        <>
+          <span className="spacer" />
+          <button onClick={onClose}>Cancel</button>
+          <button className="primary" disabled={!name.trim()} onClick={() => save()}>
+            Save
+          </button>
+        </>
       }
     >
-      <p className="muted small">Saved meals appear under "Saved" when you add food, so you can log them again in one tap.</p>
-      <label>
-        Name
-        <input autoFocus value={name} maxLength={200} onChange={(e) => setName(e.target.value)} />
-      </label>
+      <form onSubmit={save}>
+        <p className="muted small">Saved meals appear under "Saved meals" when you add food, so you can log them again in one tap.</p>
+        <label>
+          Name
+          <input autoFocus value={name} maxLength={200} onChange={(e) => setName(e.target.value)} onFocus={(e) => e.target.select()} />
+        </label>
+      </form>
     </Modal>
   );
 }
@@ -207,6 +300,9 @@ const GRAMS = '__g';
 
 export function EntryEditor({ entry, onClose }: { entry: DiaryEntry; onClose: () => void }) {
   useStore();
+  const undoDelete = useEntryUndo();
+  const added = useAddedUndo();
+  const marked = useLoggedDays();
   const food = entry.foodId ? store.get('foods', entry.foodId) : undefined;
   const isQuick = entry.grams == null;
   const servings = food?.servings ?? [];
@@ -225,8 +321,11 @@ export function EntryEditor({ entry, onClose }: { entry: DiaryEntry; onClose: ()
     : food
       ? scaleNutrients(food.nutrients, totalGrams)
       : multiplyNutrients(entry.nutrients, entry.grams ? totalGrams / entry.grams : 1);
+  const canSave = isQuick ? (quick[N.energy] ?? 0) >= 0 && quick[N.energy] != null : totalGrams > 0;
 
-  function save() {
+  function save(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!canSave) return;
     if (isQuick) store.update('diaryEntries', entry.id, { nutrients: quick, name: name.trim() || 'Quick add' });
     else
       store.update('diaryEntries', entry.id, {
@@ -235,7 +334,7 @@ export function EntryEditor({ entry, onClose }: { entry: DiaryEntry; onClose: ()
         quantity: serving === GRAMS ? 1 : (qty ?? 1),
         nutrients,
       });
-    if (day !== entry.date || meal !== entry.meal) store.moveEntry(entry.id, { day: day || entry.date, meal });
+    if (day !== entry.date || meal !== entry.meal) store.moveEntry(entry.id, { day, meal });
     onClose();
   }
 
@@ -249,71 +348,84 @@ export function EntryEditor({ entry, onClose }: { entry: DiaryEntry; onClose: ()
             className="danger"
             onClick={() => {
               store.remove('diaryEntries', entry.id);
+              undoDelete([entry.id], `Deleted “${entry.name}”.`);
               onClose();
             }}
           >
             <Icon name="trash" size={18} /> Delete
           </button>
           <span className="spacer" />
-          <button className="primary" onClick={save} disabled={!isQuick && !(totalGrams > 0)}>
+          <button onClick={onClose}>Cancel</button>
+          <button className="primary" onClick={() => save()} disabled={!canSave}>
             Save
           </button>
         </>
       }
     >
-      {isQuick ? (
-        <>
+      <form onSubmit={save}>
+        {isQuick ? (
+          <>
+            <label>
+              Name
+              <input value={name} maxLength={300} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <MacroInputs value={quick} onChange={setQuick} />
+          </>
+        ) : (
+          <>
+            <p className="entry-title">{entry.name}</p>
+            <div className="form-grid">
+              <label>
+                Amount
+                <NumberInput value={qty} onChange={setQty} />
+              </label>
+              <label>
+                Unit
+                <select
+                  value={serving}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === GRAMS) setQty(round(totalGrams, 1));
+                    else setQty(1);
+                    setServing(v);
+                  }}
+                >
+                  <option value={GRAMS}>grams</option>
+                  {servings.map((s) => (
+                    <option key={s.label} value={s.label}>
+                      {servingOption(s)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <NutrientSummary n={nutrients} />
+          </>
+        )}
+        <div className="form-grid">
           <label>
-            Name
-            <input value={name} maxLength={300} onChange={(e) => setName(e.target.value)} />
+            Meal
+            <MealSelect value={meal} onChange={setMeal} />
           </label>
-          <MacroInputs value={quick} onChange={setQuick} />
-        </>
-      ) : (
-        <>
-          <p className="entry-title">{entry.name}</p>
-          <div className="form-grid">
-            <label>
-              Amount
-              <NumberInput value={qty} onChange={setQty} />
-            </label>
-            <label>
-              Unit
-              <select value={serving} onChange={(e) => {
-                const v = e.target.value;
-                if (v === GRAMS) setQty(round(totalGrams, 1));
-                else setQty(1);
-                setServing(v);
-              }}>
-                <option value={GRAMS}>grams</option>
-                {servings.map((s) => (
-                  <option key={s.label} value={s.label}>
-                    {s.label} ({grams(s.grams)} g)
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <NutrientSummary n={nutrients} />
-        </>
-      )}
-      <div className="form-grid">
-        <label>
-          Meal
-          <MealSelect value={meal} onChange={setMeal} />
-        </label>
-        <label>
-          Day
-          <input type="date" value={day} onChange={(e) => setDay(e.target.value)} />
-        </label>
-      </div>
-      <details className="disclosure" open={!!copy} onToggle={(e) => setCopy((e.target as HTMLDetailsElement).open ? (copy ?? { day: addDays(entry.date, 1), meal: entry.meal }) : null)}>
+          <label>
+            Day
+            <DateField value={day} onChange={setDay} marked={marked} />
+          </label>
+        </div>
+        {/* Enter in a field saves */}
+        <button type="submit" hidden />
+      </form>
+      <details
+        className="disclosure"
+        open={!!copy}
+        onToggle={(e) => setCopy((e.target as HTMLDetailsElement).open ? (copy ?? { day: addDays(entry.date, 1), meal: entry.meal }) : null)}
+      >
         <summary>Copy to another day</summary>
         {copy && (
           <div className="form-grid">
             <label>
               Day
-              <input type="date" value={copy.day} onChange={(e) => setCopy({ ...copy, day: e.target.value })} />
+              <DateField value={copy.day} onChange={(d) => setCopy({ ...copy, day: d })} marked={marked} />
             </label>
             <label>
               Meal
@@ -321,9 +433,12 @@ export function EntryEditor({ entry, onClose }: { entry: DiaryEntry; onClose: ()
             </label>
             <button
               className="span-2"
-              disabled={!copy.day}
               onClick={() => {
-                store.copyEntries([entry.id], copy);
+                const rows = store.copyEntries([entry.id], copy);
+                added(
+                  rows.map((r) => r.id),
+                  `Copied to ${MEAL_LABEL[copy.meal].toLowerCase()}, ${formatDay(copy.day, true)}.`,
+                );
                 onClose();
               }}
             >
@@ -335,6 +450,12 @@ export function EntryEditor({ entry, onClose }: { entry: DiaryEntry; onClose: ()
       {entry.source === 'off' && <p className="attribution">Product data: Open Food Facts contributors (ODbL).</p>}
     </Modal>
   );
+}
+
+/** "1 cup (158 g)", without repeating grams for labels like "100 g". */
+export function servingOption(s: { label: string; grams: number }): string {
+  const g = `${grams(s.grams)} g`;
+  return s.label.includes(g) || /^\s*[\d.,]+\s*g\s*$/i.test(s.label) ? s.label : `${s.label} (${g})`;
 }
 
 export function NutrientSummary({ n }: { n: NutrientMap }) {
@@ -400,7 +521,7 @@ export function FoodPortion({
   food: Food | FoodData;
   day: string;
   meal: Meal;
-  onLogged: () => void;
+  onLogged: (entry: DiaryEntry, meal: Meal) => void;
   onBack?: () => void;
   note?: React.ReactNode;
 }) {
@@ -424,21 +545,42 @@ export function FoodPortion({
     store.update('foods', f.id, { favorite: !f.favorite });
   }
 
+  function log(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!(totalGrams > 0)) return;
+    const entry = store.logFood({
+      day,
+      meal,
+      food,
+      grams: totalGrams,
+      servingLabel: serving === GRAMS ? null : serving,
+      quantity: serving === GRAMS ? 1 : (qty ?? 1),
+    });
+    onLogged(entry, meal);
+  }
+
   return (
-    <div className="portion">
+    <form className="portion" onSubmit={log}>
       <div className="portion-head">
         {onBack && (
-          <button className="icon-btn" onClick={onBack} aria-label="Back">
+          <button type="button" className="icon-btn" onClick={onBack} aria-label="Back to results">
             <Icon name="left" />
           </button>
         )}
         <div className="portion-title">
           <strong>{food.name}</strong>
           <span className="muted small">
-            {[food.brand, SOURCE_LABEL[food.source]].filter(Boolean).join(' · ')} · {kcal(food.nutrients[N.energy])} kcal / 100 g
+            {[food.brand, SOURCE_LABEL[food.source], `${kcal(food.nutrients[N.energy])} kcal / 100 g`].filter(Boolean).join(' · ')}
           </span>
         </div>
-        <button className={`icon-btn ${fav ? 'fav' : ''}`} onClick={toggleFav} aria-pressed={fav} aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}>
+        <button
+          type="button"
+          className={`icon-btn ${fav ? 'fav' : ''}`}
+          onClick={toggleFav}
+          aria-pressed={fav}
+          aria-label={fav ? 'Remove from favourites' : 'Add to favourites'}
+          title={fav ? 'Remove from favourites' : 'Add to favourites'}
+        >
           <Icon name="star" filled={fav} />
         </button>
       </div>
@@ -460,7 +602,7 @@ export function FoodPortion({
             <option value={GRAMS}>grams</option>
             {servings.map((s) => (
               <option key={s.label} value={s.label}>
-                {s.label} ({grams(s.grams)} g)
+                {servingOption(s)}
               </option>
             ))}
           </select>
@@ -472,24 +614,10 @@ export function FoodPortion({
       </div>
       <NutrientSummary n={nutrients} />
       {note}
-      <button
-        className="primary block"
-        disabled={!(totalGrams > 0)}
-        onClick={() => {
-          store.logFood({
-            day,
-            meal,
-            food,
-            grams: totalGrams,
-            servingLabel: serving === GRAMS ? null : serving,
-            quantity: serving === GRAMS ? 1 : (qty ?? 1),
-          });
-          onLogged();
-        }}
-      >
+      <button type="submit" className="primary block" disabled={!(totalGrams > 0)}>
         Add to {MEAL_LABEL[meal].toLowerCase()}
       </button>
-    </div>
+    </form>
   );
 }
 
@@ -507,7 +635,7 @@ export function FoodRow({ food, onPick, hint }: { food: Food | FoodData; onPick:
   const fav = 'favorite' in food && food.favorite;
   return (
     <li>
-      <button className="food-row" onClick={onPick}>
+      <button type="button" className="food-row" onClick={onPick}>
         <span className="entry-main">
           <span className="entry-name">
             {fav && <Icon name="star" size={14} filled />} {food.name}
@@ -516,7 +644,7 @@ export function FoodRow({ food, onPick, hint }: { food: Food | FoodData; onPick:
         </span>
         <span className="entry-kcal">
           {kcal(food.nutrients[N.energy])}
-          <small> /100g</small>
+          <small> kcal/100 g</small>
         </span>
       </button>
     </li>

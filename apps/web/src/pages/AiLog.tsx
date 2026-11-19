@@ -18,6 +18,7 @@ import { errorMessage, setPrefs, store } from '../state';
 import { downscaleImage, requestEstimate, searchFoods, searchLocalFoods, sha256Base64, type AiStatus } from '../foodApi';
 import { FoodRow, MacroLine, NutrientSummary } from '../components';
 import { Empty, grams, Icon, kcal, MEAL_LABEL, MealSelect, NumberInput } from '../ui';
+import { InlineError, Spinner } from '../feedback';
 
 export const formatUsd = (v: number) => (v < 0.01 ? `${(v * 100).toFixed(2)}¢` : v < 1 ? `${(v * 100).toFixed(1)}¢` : `$${v.toFixed(2)}`);
 export const modelLabel = (id: string) => AI_MODELS.find((m) => m.id === id)?.label.split(' — ')[0] ?? id;
@@ -52,7 +53,7 @@ export function AiLog({
   setMeal: (m: Meal) => void;
   status: AiStatus;
   prefs: Prefs;
-  onLogged: (n: number) => void;
+  onLogged: (ids: string[], meal: Meal) => void;
 }) {
   const [photo, setPhoto] = useState<{ base64: string; dataUrl: string } | null>(null);
   const [description, setDescription] = useState('');
@@ -61,6 +62,7 @@ export function AiLog({
   const [result, setResult] = useState<{ estimate: MealEstimate; model: string; inputTokens: number; outputTokens: number; costUsd: number } | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [swapping, setSwapping] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const model = pickModel(status, prefs);
   const limitReached = status.monthlyLimit > 0 && status.usedThisMonth >= status.monthlyLimit;
@@ -119,7 +121,8 @@ export function AiLog({
   }
 
   async function addAll() {
-    if (!result) return;
+    if (!result || adding) return;
+    setAdding(true);
     const photoHash = photo ? await sha256Base64(photo.base64) : null;
     const row = store.recordAiEstimate({
       date: day,
@@ -132,9 +135,10 @@ export function AiLog({
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
     });
-    for (const it of items) store.logFood({ day, meal, ...reviewItemToLog(it), aiEstimateId: row.id });
-    onLogged(items.length);
+    const ids = items.map((it) => store.logFood({ day, meal, ...reviewItemToLog(it), aiEstimateId: row.id }).id);
+    onLogged(ids, meal);
     reset();
+    setAdding(false);
   }
 
   function reset() {
@@ -173,7 +177,7 @@ export function AiLog({
                   <strong className="ellipsis-2">{it.name}</strong>
                   <div className="muted small">
                     <span className={`conf conf-${it.confidence}`}>{it.confidence} confidence</span> ·{' '}
-                    {it.usedAi ? <span className="badge">AI nutrients</span> : <span>matched: {it.matchedFood?.name}</span>}
+                    {it.usedAi || !it.matchedFood ? <span className="badge">AI nutrients</span> : <span>matched: {it.matchedFood.name}</span>}
                   </div>
                 </div>
                 <strong className="nowrap">{kcal(it.nutrients[N.energy])} kcal</strong>
@@ -224,7 +228,7 @@ export function AiLog({
           </label>
           <div className="actions-end">
             <button onClick={reset}>Start over</button>
-            <button className="primary" disabled={!items.length} onClick={() => void addAll()}>
+            <button className="primary" disabled={!items.length || adding} onClick={() => void addAll()}>
               Add {items.length} to {MEAL_LABEL[meal].toLowerCase()}
             </button>
           </div>
@@ -244,12 +248,22 @@ export function AiLog({
             </button>
           </>
         ) : (
-          <button className="photo-pick" onClick={() => fileRef.current?.click()}>
+          <button className="photo-pick" onClick={() => fileRef.current?.click()} disabled={!!busy}>
             <Icon name="camera" size={32} />
             <span>Take or choose a photo</span>
           </button>
         )}
-        <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => void onFile(e.target.files?.[0])} />
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+          onChange={(e) => {
+            void onFile(e.target.files?.[0]);
+            e.target.value = '';
+          }}
+        />
       </div>
       <label>
         Describe it (optional with a photo)
@@ -261,10 +275,16 @@ export function AiLog({
         />
       </label>
       <p className="muted small">What you write wins over what's in the photo, so mention portions or swaps you know about.</p>
-      {error && <p className="error">{error}</p>}
-      {limitReached && <p className="error">You've used all {status.monthlyLimit} AI estimates for this month.</p>}
+      <InlineError>{error}</InlineError>
+      {limitReached && <InlineError>You've used all {status.monthlyLimit} AI estimates for this month.</InlineError>}
       <button className="primary block" disabled={!!busy || limitReached || (!photo && !description.trim())} onClick={() => void estimate()}>
-        {busy ?? 'Estimate meal'}
+        {busy ? (
+          <>
+            <Spinner /> {busy}
+          </>
+        ) : (
+          'Estimate meal'
+        )}
       </button>
       <p className="muted small">
         {modelLabel(model)} · about {formatUsd(typicalMealCostUsd(model))} per meal
@@ -298,9 +318,10 @@ function SwapSearch({ initial, onPick }: { initial: string; onPick: (f: Food) =>
   }, [q]);
   return (
     <div className="swap">
-      <input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search for a replacement food" />
-      {error && <p className="error small">{error}</p>}
-      <ul className="list scroll">
+      <input autoFocus type="search" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search for a replacement food" />
+      <InlineError>{error}</InlineError>
+      {!foods.length && !error && q.trim().length >= 2 && <p className="muted small">Searching…</p>}
+      <ul className="list scroll" hidden={!foods.length}>
         {foods.map((f) => (
           <FoodRow key={f.id} food={f} onPick={() => onPick(f)} hint={`${grams(f.nutrients[N.protein])} g protein`} />
         ))}

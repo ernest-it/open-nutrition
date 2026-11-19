@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { CORE_NUTRIENTS, N, NUTRIENTS, type Food, type FoodData, type NutrientMap, type Serving } from '@open-nutrition/shared';
-import { store, useStore } from '../state';
-import { SOURCE_LABEL } from '../components';
-import { Empty, grams, Icon, kcal, Modal, NumberInput, Segmented } from '../ui';
+import { restoreRows, store, useStore } from '../state';
+import { SOURCE_LABEL, servingOption } from '../components';
+import { InlineError, useConfirm, useToast } from '../feedback';
+import { Empty, Icon, kcal, Modal, NumberInput, Segmented } from '../ui';
 
 type View = 'custom' | 'favorites' | 'all';
 
 export function FoodsPage() {
   const s = useStore();
-  const [view, setView] = useState<View>('custom');
+  const toast = useToast();
+  const [view, setView] = useState<View>('all');
   const [q, setQ] = useState('');
   const [editing, setEditing] = useState<Food | 'new' | null>(null);
   const all = s.all('foods').sort((a, b) => a.name.localeCompare(b.name));
@@ -31,12 +33,15 @@ export function FoodsPage() {
           onChange={setView}
           label="Which foods"
           options={[
+            ['all', 'All used'],
             ['custom', 'My foods'],
             ['favorites', 'Favourites'],
-            ['all', 'All used'],
           ]}
         />
-        <input type="search" placeholder="Filter" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Filter foods" />
+        <div className="search-box toolbar-search">
+          <Icon name="search" size={18} />
+          <input type="search" placeholder="Filter by name or brand" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Filter foods" />
+        </div>
       </div>
       {list.length ? (
         <ul className="list cards-md">
@@ -51,13 +56,14 @@ export function FoodsPage() {
                 </span>
                 <span className="entry-kcal">
                   {kcal(f.nutrients[N.energy])}
-                  <small> /100g</small>
+                  <small> kcal/100 g</small>
                 </span>
               </button>
               <button
                 className={`icon-btn ${f.favorite ? 'fav' : ''}`}
                 aria-pressed={f.favorite}
                 aria-label={f.favorite ? `Unfavourite ${f.name}` : `Favourite ${f.name}`}
+                title={f.favorite ? 'Remove from favourites' : 'Add to favourites'}
                 onClick={() => s.update('foods', f.id, { favorite: !f.favorite })}
               >
                 <Icon name="star" filled={f.favorite} />
@@ -67,7 +73,9 @@ export function FoodsPage() {
         </ul>
       ) : (
         <Empty>
-          {view === 'custom'
+          {words.length
+            ? `No ${view === 'custom' ? 'custom foods' : view === 'favorites' ? 'favourites' : 'foods'} match “${q.trim()}”.`
+            : view === 'custom'
             ? 'You haven’t created any foods yet. Add your own recipes, home-made dishes or anything missing from the database.'
             : view === 'favorites'
               ? 'Tap the star on any food to keep it at the top of your search.'
@@ -75,7 +83,14 @@ export function FoodsPage() {
         </Empty>
       )}
       {editing && (
-        <FoodEditor food={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} onSaved={() => setEditing(null)} />
+        <FoodEditor
+          food={editing === 'new' ? undefined : editing}
+          onClose={() => setEditing(null)}
+          onSaved={(f) => {
+            setEditing(null);
+            toast({ message: `Saved “${f.name}”.`, tone: 'success' });
+          }}
+        />
       )}
     </div>
   );
@@ -102,7 +117,9 @@ export function FoodEditor({
   const [per100, setPer100] = useState<NutrientMap>({ ...(base.nutrients ?? {}) });
   const [basis, setBasis] = useState<number>(-1); // -1 = per 100 g, else serving index
   const [more, setMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ field: 'name' | 'kcal'; text: string } | null>(null);
+  const ask = useConfirm();
+  const toast = useToast();
 
   const validServings = servings.filter((s) => s.label.trim() && s.grams > 0);
   const basisGrams = basis >= 0 ? (validServings[basis]?.grams ?? 100) : 100;
@@ -117,8 +134,16 @@ export function FoodEditor({
     });
 
   function save() {
-    if (!name.trim()) return setError('Give the food a name.');
-    if (per100[N.energy] == null) return setError('Enter the calories.');
+    if (!name.trim()) {
+      setError({ field: 'name', text: 'Give the food a name.' });
+      document.getElementById('food-name')?.focus();
+      return;
+    }
+    if (per100[N.energy] == null) {
+      setError({ field: 'kcal', text: 'Enter the calories.' });
+      document.querySelector<HTMLElement>('[data-nutrient="' + N.energy + '"] input')?.focus();
+      return;
+    }
     const saved = store.upsertFood({
       id: food?.id,
       name: name.trim().slice(0, 300),
@@ -143,9 +168,16 @@ export function FoodEditor({
           {food && (
             <button
               className="danger"
-              onClick={() => {
-                if (!confirm(`Delete “${food.name}”? Diary entries keep their numbers.`)) return;
+              onClick={async () => {
+                const ok = await ask({
+                  title: 'Delete this food?',
+                  body: <>“{food.name}” will be removed from your foods. Diary entries that use it keep their numbers.</>,
+                  confirmLabel: 'Delete food',
+                  destructive: true,
+                });
+                if (!ok) return;
                 store.remove('foods', food.id);
+                toast({ message: `Deleted “${food.name}”.`, action: { label: 'Undo', onClick: () => restoreRows('foods', [food.id]) } });
                 onClose();
               }}
             >
@@ -166,7 +198,20 @@ export function FoodEditor({
       <div className="form-grid">
         <label className="span-2">
           Name
-          <input autoFocus value={name} maxLength={300} onChange={(e) => setName(e.target.value)} placeholder="e.g. Mum's lentil soup" />
+          <input
+            id="food-name"
+            autoFocus={!food}
+            value={name}
+            maxLength={300}
+            onChange={(e) => {
+              setName(e.target.value);
+              if (error?.field === 'name') setError(null);
+            }}
+            placeholder="e.g. Mum's lentil soup"
+            aria-invalid={error?.field === 'name'}
+            aria-describedby={error?.field === 'name' ? 'food-error' : undefined}
+          />
+          {error?.field === 'name' && <InlineError id="food-error">{error.text}</InlineError>}
         </label>
         <label>
           Brand (optional)
@@ -217,7 +262,7 @@ export function FoodEditor({
             <option value={-1}>per 100 g</option>
             {validServings.map((s, i) => (
               <option key={i} value={i}>
-                per {s.label} ({grams(s.grams)} g)
+                per {servingOption(s)}
               </option>
             ))}
           </select>
@@ -225,18 +270,25 @@ export function FoodEditor({
       </div>
       <div className="nutrient-inputs">
         {shown.map((n) => (
-          <label key={n.key}>
+          <label key={n.key} data-nutrient={n.key} className={error?.field === 'kcal' && n.key === N.energy ? 'invalid' : ''}>
             <span>
               {n.name} <small>({n.unit})</small>
             </span>
-            <NumberInput value={display(n.key)} onChange={(v) => setValue(n.key, v)} ariaLabel={`${n.name} in ${n.unit}`} />
+            <NumberInput
+              value={display(n.key)}
+              onChange={(v) => {
+                setValue(n.key, v);
+                if (n.key === N.energy && error?.field === 'kcal') setError(null);
+              }}
+              ariaLabel={`${n.name} in ${n.unit}`}
+            />
           </label>
         ))}
       </div>
-      <button className="link small" onClick={() => setMore(!more)}>
-        {more ? 'Show fewer nutrients' : 'Show all nutrients'}
+      {error?.field === 'kcal' && <InlineError>{error.text}</InlineError>}
+      <button className="link small" onClick={() => setMore(!more)} aria-expanded={more}>
+        {more ? 'Show fewer nutrients' : `Show all ${NUTRIENTS.length} nutrients`}
       </button>
-      {error && <p className="error">{error}</p>}
     </Modal>
   );
 }

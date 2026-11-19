@@ -1,6 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ComponentRef, type ReactNode, type Ref } from 'react';
 import {
-  Animated,
+  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -10,99 +10,41 @@ import {
   Text,
   TextInput,
   View,
-  useColorScheme,
   type StyleProp,
   type TextInputProps,
+  type TextProps,
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Haptics from 'expo-haptics';
-import { addDays, parseDay, todayLocal, type Meal, type NutrientStatus } from '@open-nutrition/shared';
+import { addDays, parseDay, todayLocal, type Meal } from '@open-nutrition/shared';
+import { Banner, ToastHost } from './feedback';
 import { Icon, type IconName } from './icons';
 import { MAX_CONTENT_WIDTH, useLayout } from './layout';
+import { haptic, useTheme } from './theme';
 
-export interface Theme {
-  dark: boolean;
-  bg: string;
-  surface: string;
-  surface2: string;
-  text: string;
-  muted: string;
-  border: string;
-  accent: string;
-  accentSoft: string;
-  onAccent: string;
-  success: string;
-  danger: string;
-  warn: string;
-  doneRow: string;
-  protein: string;
-  carbs: string;
-  fat: string;
-  water: string;
-  track: string;
+export { haptic, statusColor, useTheme, type Theme } from './theme';
+export { Banner, Dialog, DialogButton, useConfirm, useToast } from './feedback';
+
+/** Set by the app shell while a pushed route shows its title in the top bar (screens then skip their own big title). */
+export const HeaderTitleContext = createContext(false);
+
+/**
+ * Runs `fn` at most once until `reset()` (guards "Add" / "Save" buttons that close the screen
+ * against a fast double tap logging twice).
+ */
+export function useOnce() {
+  const done = useRef(false);
+  const run = useCallback((fn: () => void) => {
+    if (done.current) return;
+    done.current = true;
+    fn();
+  }, []);
+  const reset = useCallback(() => {
+    done.current = false;
+  }, []);
+  return { run, reset };
 }
-
-const light: Theme = {
-  dark: false,
-  bg: '#f4f5f7',
-  surface: '#ffffff',
-  surface2: '#eef0f3',
-  text: '#14161a',
-  muted: '#5f6673',
-  border: '#dde1e6',
-  accent: '#2f6df6',
-  accentSoft: '#e3ebfe',
-  onAccent: '#ffffff',
-  success: '#16a34a',
-  danger: '#dc2626',
-  warn: '#c26a04',
-  doneRow: '#e8f6ec',
-  protein: '#0d9488',
-  carbs: '#d97706',
-  fat: '#8b5cf6',
-  water: '#0284c7',
-  track: '#e6e9ee',
-};
-const dark: Theme = {
-  ...light,
-  dark: true,
-  bg: '#111318',
-  surface: '#1b1e25',
-  surface2: '#252932',
-  text: '#e8eaee',
-  muted: '#9aa1ad',
-  border: '#2e333d',
-  accent: '#4f86ff',
-  accentSoft: '#1d2b4d',
-  doneRow: '#16301f',
-  success: '#22c55e',
-  danger: '#f05252',
-  warn: '#f59e0b',
-  protein: '#2dd4bf',
-  carbs: '#fbbf24',
-  fat: '#a78bfa',
-  water: '#38bdf8',
-  track: '#2a2f39',
-};
-
-export function useTheme(): Theme {
-  return useColorScheme() === 'dark' ? dark : light;
-}
-
-export function statusColor(t: Theme, s: NutrientStatus): string {
-  return s === 'over' ? t.danger : s === 'under' ? t.warn : t.success;
-}
-
-// ---- haptics (best effort; never throw) -------------------------------------------------------
-
-export const haptic = {
-  tap: () => void Haptics.selectionAsync().catch(() => {}),
-  light: () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {}),
-  success: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}),
-  warn: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {}),
-};
 
 // ---- containers ----------------------------------------------------------------------------------
 
@@ -154,6 +96,8 @@ export function Screen({
 
 export function Title({ children, right }: { children: ReactNode; right?: ReactNode }) {
   const t = useTheme();
+  const inHeader = useContext(HeaderTitleContext);
+  if (inHeader) return right ? <View style={[styles.row, { justifyContent: 'flex-end', marginBottom: 4 }]}>{right}</View> : null;
   return (
     <View style={[styles.rowBetween, { flexWrap: 'wrap' }]}>
       <Text accessibilityRole="header" style={[styles.h1, { color: t.text, flexShrink: 1 }]} maxFontSizeMultiplier={1.6}>
@@ -211,6 +155,7 @@ export function Sheet({ visible = true, onClose, children }: { visible?: boolean
       >
         <View style={styles.sheetBody}>{children}</View>
       </View>
+      <ToastHost bottom={16} />
     </Modal>
   );
 }
@@ -248,7 +193,7 @@ export function Card({ children, style, onPress }: { children: ReactNode; style?
 
 // ---- controls ------------------------------------------------------------------------------------
 
-type Variant = 'default' | 'primary' | 'success' | 'danger' | 'ghost';
+type Variant = 'default' | 'primary' | 'danger' | 'ghost';
 export function Button({
   title,
   onPress,
@@ -258,6 +203,7 @@ export function Button({
   icon,
   style,
   accessibilityLabel,
+  loading,
 }: {
   title: string;
   onPress: () => void;
@@ -267,16 +213,19 @@ export function Button({
   icon?: IconName;
   style?: StyleProp<ViewStyle>;
   accessibilityLabel?: string;
+  /** Shows a spinner and blocks presses (no double submit). */
+  loading?: boolean;
 }) {
   const t = useTheme();
-  const bg = { default: t.surface2, primary: t.accent, success: t.success, danger: 'transparent', ghost: 'transparent' }[variant];
-  const fg = { default: t.text, primary: t.onAccent, success: '#fff', danger: t.danger, ghost: t.accent }[variant];
+  const bg = { default: t.surface2, primary: t.accent, danger: 'transparent', ghost: 'transparent' }[variant];
+  const fg = { default: t.text, primary: t.onAccent, danger: t.danger, ghost: t.accent }[variant];
+  const off = !!disabled || !!loading;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      accessibilityState={{ disabled: !!disabled }}
-      disabled={disabled}
+      accessibilityState={{ disabled: off, busy: !!loading }}
+      disabled={off}
       onPress={onPress}
       hitSlop={small ? 6 : 0}
       style={({ pressed }) => [
@@ -286,7 +235,7 @@ export function Button({
         style,
       ]}
     >
-      {icon && <Icon name={icon} size={small ? 16 : 18} color={fg} />}
+      {loading ? <ActivityIndicator size="small" color={fg} /> : icon && <Icon name={icon} size={small ? 16 : 18} color={fg} />}
       <Text style={{ color: fg, fontWeight: '600', fontSize: small ? 14 : 15, textAlign: 'center', flexShrink: 1 }} maxFontSizeMultiplier={1.5}>
         {title}
       </Text>
@@ -330,15 +279,39 @@ export function IconButton({
   );
 }
 
-export function Input(props: TextInputProps) {
+/** Text field with a focus ring. `label` adds a small caption above (and becomes the accessibility label). */
+export function Input({ label: caption, ...props }: TextInputProps & { label?: string; ref?: Ref<ComponentRef<typeof TextInput>> }) {
   const t = useTheme();
-  return (
+  const [focused, setFocused] = useState(false);
+  const field = (
     <TextInput
       placeholderTextColor={t.muted}
       maxFontSizeMultiplier={1.6}
+      accessibilityLabel={caption}
       {...props}
-      style={[styles.input, { color: t.text, backgroundColor: t.surface, borderColor: t.border }, props.style]}
+      onFocus={(e) => {
+        setFocused(true);
+        props.onFocus?.(e);
+      }}
+      onBlur={(e) => {
+        setFocused(false);
+        props.onBlur?.(e);
+      }}
+      style={[
+        styles.input,
+        { color: t.text, backgroundColor: t.surface, borderColor: focused ? t.accent : t.border, borderWidth: 1 },
+        props.style,
+      ]}
     />
+  );
+  if (!caption) return field;
+  return (
+    <View style={{ marginTop: 4 }}>
+      <Text maxFontSizeMultiplier={1.5} style={{ color: t.muted, fontSize: 13, fontWeight: '600' }} importantForAccessibility="no">
+        {caption}
+      </Text>
+      {field}
+    </View>
   );
 }
 
@@ -446,6 +419,7 @@ export function T({
   lines,
   maxScale,
   color,
+  accessibilityRole,
 }: {
   children: ReactNode;
   muted?: boolean;
@@ -455,12 +429,14 @@ export function T({
   lines?: number;
   maxScale?: number;
   color?: string;
+  accessibilityRole?: TextProps['accessibilityRole'];
 }) {
   const t = useTheme();
   return (
     <Text
       numberOfLines={lines}
       maxFontSizeMultiplier={maxScale}
+      accessibilityRole={accessibilityRole}
       style={[{ color: color ?? (muted ? t.muted : t.text), fontSize: small ? 13 : 15, fontWeight: bold ? '700' : '400' }, style]}
     >
       {children}
@@ -568,7 +544,7 @@ export function Toggle({ label: lbl, value, onChange, hint }: { label: string; v
         )}
       </View>
       <View style={[styles.switchTrack, { backgroundColor: value ? t.accent : t.track }]}>
-        <View style={[styles.switchThumb, { alignSelf: value ? 'flex-end' : 'flex-start' }]} />
+        <View style={[styles.switchThumb, { backgroundColor: t.thumb, alignSelf: value ? 'flex-end' : 'flex-start' }]} />
       </View>
     </Pressable>
   );
@@ -665,52 +641,9 @@ export function Badge({ text, color }: { text: string; color?: string }) {
   );
 }
 
+/** Informational note (an inline Banner without the alert semantics of errors). */
 export function Notice({ children, tone = 'info' }: { children: ReactNode; tone?: 'info' | 'warn' }) {
-  const t = useTheme();
-  return (
-    <View style={[styles.notice, { backgroundColor: tone === 'warn' ? (t.dark ? '#3a2a10' : '#fff5e6') : t.accentSoft }]}>
-      <Icon name="info" size={18} color={tone === 'warn' ? t.warn : t.accent} />
-      <View style={{ flex: 1 }}>{typeof children === 'string' ? <T small>{children}</T> : children}</View>
-    </View>
-  );
-}
-
-// ---- toast ---------------------------------------------------------------------------------------
-
-const ToastContext = createContext<(msg: string) => void>(() => {});
-export const useToast = () => useContext(ToastContext);
-
-export function ToastProvider({ children }: { children: ReactNode }) {
-  const t = useTheme();
-  const insets = useSafeAreaInsets();
-  const [msg, setMsg] = useState<string | null>(null);
-  const opacity = useRef(new Animated.Value(0)).current;
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const show = useCallback(
-    (m: string) => {
-      setMsg(m);
-      clearTimeout(timer.current);
-      Animated.timing(opacity, { toValue: 1, duration: 150, useNativeDriver: true }).start();
-      timer.current = setTimeout(() => {
-        Animated.timing(opacity, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => setMsg(null));
-      }, 2200);
-    },
-    [opacity],
-  );
-  return (
-    <ToastContext.Provider value={show}>
-      {children}
-      {msg != null && (
-        <Animated.View
-          pointerEvents="none"
-          accessibilityLiveRegion="polite"
-          style={[styles.toast, { opacity, bottom: insets.bottom + 84, backgroundColor: t.dark ? '#e8eaee' : '#1b1e25' }]}
-        >
-          <Text style={{ color: t.dark ? '#111318' : '#fff', fontSize: 14 }}>{msg}</Text>
-        </Animated.View>
-      )}
-    </ToastContext.Provider>
-  );
+  return typeof children === 'string' ? <Banner tone={tone} message={children} /> : <Banner tone={tone}>{children}</Banner>;
 }
 
 // ---- formatting ------------------------------------------------------------------------------------
@@ -775,9 +708,7 @@ export const styles = StyleSheet.create({
   segmented: { flexDirection: 'row', borderRadius: 10, padding: 3, marginVertical: 6 },
   segment: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 8, paddingHorizontal: 4 },
   switchTrack: { width: 50, height: 30, borderRadius: 15, padding: 3, justifyContent: 'center' },
-  switchThumb: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#fff' },
+  switchThumb: { width: 24, height: 24, borderRadius: 12 },
   listRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 52, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10 },
   badge: { borderWidth: 1, borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1, alignSelf: 'flex-start' },
-  notice: { flexDirection: 'row', gap: 8, padding: 10, borderRadius: 10, marginVertical: 6, alignItems: 'flex-start' },
-  toast: { position: 'absolute', alignSelf: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, maxWidth: '90%' },
 });

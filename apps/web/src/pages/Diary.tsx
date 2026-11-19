@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { daySchema, MEALS, N } from '@open-nutrition/shared';
 import { navigate } from '../router';
-import { useBreakpoint, useStore } from '../state';
-import { MealSection, NutrientSummary } from '../components';
+import { useBreakpoint, useLoggedDays, useStore } from '../state';
+import { MealSection, NutrientSummary, plural } from '../components';
 import { WaterCard } from './Today';
 import { Bar, Calendar, DayNav, dayLabel, kcal, Modal } from '../ui';
 
@@ -16,8 +16,7 @@ export function DiaryPage({ day: routeDay }: { day?: string }) {
   const totals = store.dayTotals(day);
   const target = store.targetsOn(day);
   const budget = target?.nutrients[N.energy] ?? 0;
-  const version = store.version;
-  const marked = useMemo(() => new Set(store.all('diaryEntries').map((e) => e.date)), [version]); // eslint-disable-line react-hooks/exhaustive-deps
+  const marked = useLoggedDays();
 
   const calendar = <Calendar value={day} marked={marked} onPick={(d) => { go(d); setCalOpen(false); }} />;
 
@@ -31,19 +30,14 @@ export function DiaryPage({ day: routeDay }: { day?: string }) {
         <div className="split-side">
           {bp === 'expanded' && <section className="card">{calendar}</section>}
           <section className="card">
-            <div className="row between">
-              <h3>{dayLabel(day, true)}</h3>
-            </div>
+            <h3>{dayLabel(day, true)}</h3>
             <NutrientSummary n={totals} />
-            {budget > 0 && (
-              <>
-                <Bar value={totals[N.energy] ?? 0} max={budget} status={(totals[N.energy] ?? 0) > budget * 1.1 ? 'over' : 'ok'} label="Calories" />
-                <p className="muted small">
-                  {kcal(totals[N.energy])} of {kcal(budget)} kcal · {entries.length} item{entries.length === 1 ? '' : 's'}
-                </p>
-              </>
-            )}
-            <a className="link small" href="#/nutrients">
+            {budget > 0 && <Bar value={totals[N.energy] ?? 0} max={budget} status={(totals[N.energy] ?? 0) > budget * 1.1 ? 'over' : 'ok'} label="Calories" />}
+            <p className="muted small">
+              {budget > 0 ? `${kcal(totals[N.energy])} of ${kcal(budget)} kcal · ` : ''}
+              {entries.length ? plural(entries.length, 'item') : 'Nothing logged yet'}
+            </p>
+            <a className="link small" href={`#/nutrients/${day}`}>
               Full nutrient report →
             </a>
           </section>
@@ -57,7 +51,7 @@ export function DiaryPage({ day: routeDay }: { day?: string }) {
         </div>
       </div>
       {calOpen && (
-        <Modal title="Pick a day" onClose={() => setCalOpen(false)}>
+        <Modal title="Pick a day" onClose={() => setCalOpen(false)} variant="compact">
           {calendar}
         </Modal>
       )}

@@ -1,5 +1,5 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
-import { NutritionStore, type Prefs, type Snapshot, type StorageAdapter } from '@open-nutrition/shared';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { NutritionStore, type CollectionName, type Prefs, type Snapshot, type StorageAdapter } from '@open-nutrition/shared';
 
 /** IndexedDB-backed snapshot storage (one record per user), with a localStorage fallback. */
 class IdbStorage implements StorageAdapter {
@@ -121,6 +121,28 @@ export function usePrefs(): Prefs {
 
 export function setPrefs(patch: Partial<Prefs>) {
   store.setSetting('prefs', { ...store.prefs(), ...patch });
+}
+
+/**
+ * Undo a soft delete (rows are tombstoned with `deletedAt`, so restoring is a newer write that
+ * clears it; last-write-wins sync carries it to the server).
+ */
+export function restoreRows(c: CollectionName, ids: string[]) {
+  for (const id of ids) store.update(c, id, { deletedAt: null } as never);
+}
+
+/** Soft-delete rows and return their ids (for an Undo toast). */
+export function removeRows(c: CollectionName, ids: string[]): string[] {
+  for (const id of ids) store.remove(c, id);
+  return ids;
+}
+
+/** Days that have at least one diary entry (calendar dots). */
+export function useLoggedDays(): Set<string> {
+  const s = useStore();
+  const version = s.version;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => new Set(s.all('diaryEntries').map((e) => e.date)), [version]);
 }
 
 /** Web-only setting: the goal weight drawn on the weight chart. */

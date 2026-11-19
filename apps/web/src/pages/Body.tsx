@@ -1,19 +1,9 @@
 import { useState } from 'react';
-import {
-  dayOf,
-  formatLength,
-  formatWeight,
-  fromKg,
-  MEASUREMENT_KINDS,
-  toCm,
-  toKg,
-  weeklyRate,
-  weightTrend,
-  type MeasurementKind,
-} from '@open-nutrition/shared';
-import { SETTING_GOAL_WEIGHT, usePrefs, useStore } from '../state';
+import { fromCm, fromKg, MEASUREMENT_KINDS, toCm, toKg, weeklyRate, weightTrend, type MeasurementKind } from '@open-nutrition/shared';
+import { removeRows, restoreRows, SETTING_GOAL_WEIGHT, usePrefs, useStore } from '../state';
 import { WeightChart } from '../charts';
-import { Empty, Icon, NumberInput, Segmented } from '../ui';
+import { useToast } from '../feedback';
+import { DateField, Empty, fmt, formatDay, Icon, NumberInput, Segmented, signed } from '../ui';
 
 const RANGES = [
   ['30', '1M'],
@@ -37,6 +27,17 @@ const KIND_LABEL: Record<string, string> = {
   right_thigh: 'Right thigh',
 };
 
+/** 'Tue, Nov 17' this year, 'Tue, Nov 17, 2025' otherwise. */
+const dateOf = (t: number) => {
+  const d = new Date(t);
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() && { year: 'numeric' }) });
+};
+/** "today" / "yesterday" lower-cased mid-sentence, other days as "Tue, Nov 17, 2026". */
+const onDay = (day: string) => {
+  const d = formatDay(day, true);
+  return /^[A-Z][a-z]+$/.test(d) ? d.toLowerCase() : d;
+};
+
 /** Noon local time on a YYYY-MM-DD day (today's entries use "now"). */
 function takenAtFor(day: string, today: string): number {
   if (day === today) return Date.now();
@@ -47,12 +48,14 @@ function takenAtFor(day: string, today: string): number {
 export function BodyPage() {
   const store = useStore();
   const prefs = usePrefs();
+  const toast = useToast();
   const wu = prefs.weightUnit;
   const today = store.today();
   const [value, setValue] = useState<number | null>(null);
   const [day, setDay] = useState(today);
   const [range, setRange] = useState<Range>('90');
   const [showAll, setShowAll] = useState(false);
+  const w1 = (kg: number) => fmt(fromKg(kg, wu), 1, true);
 
   const weights = store.measurementsOf('body_weight');
   const goalKg = store.getSetting<number | null>(SETTING_GOAL_WEIGHT, null);
@@ -62,7 +65,7 @@ export function BodyPage() {
   const recent = weights.filter((p) => p.takenAt >= Date.now() - 28 * 86_400_000);
   const rate = weeklyRate(recent);
   const latest = weights.at(-1);
-  const latestTrend = trend.at(-1)?.trend;
+  const latestTrend = trend.at(-1)?.trend ?? (latest ? weightTrend(weights).at(-1)?.trend : undefined);
 
   return (
     <div className="page">
@@ -77,17 +80,23 @@ export function BodyPage() {
             onSubmit={(e) => {
               e.preventDefault();
               if (value == null || value <= 0) return;
-              store.addMeasurement('body_weight', toKg(value, wu), takenAtFor(day, today));
+              const m = store.addMeasurement('body_weight', toKg(value, wu), takenAtFor(day, today));
+              toast({
+                message: `Saved ${fmt(value, 1)} ${wu} for ${onDay(day)}.`,
+                tone: 'success',
+                action: { label: 'Undo', onClick: () => removeRows('measurements', [m.id]) },
+              });
               setValue(null);
+              setDay(today);
             }}
           >
             <label>
               Weight ({wu})
-              <NumberInput value={value} onChange={setValue} placeholder={latest ? formatWeight(latest.value, wu) : ''} />
+              <NumberInput value={value} onChange={setValue} placeholder={latest ? w1(latest.value) : wu === 'kg' ? 'e.g. 72.5' : 'e.g. 160'} />
             </label>
             <label>
               Date
-              <input type="date" value={day} max={today} onChange={(e) => setDay(e.target.value || today)} />
+              <DateField value={day} onChange={setDay} max={today} title="Weigh-in date" />
             </label>
             <button className="primary span-2" type="submit" disabled={!value}>
               Save weigh-in
@@ -99,20 +108,20 @@ export function BodyPage() {
           <dl className="stats">
             <div>
               <dt>Latest</dt>
-              <dd>{latest ? `${formatWeight(latest.value, wu)} ${wu}` : '—'}</dd>
+              <dd>{latest ? `${w1(latest.value)} ${wu}` : '—'}</dd>
             </div>
             <div>
               <dt>7-day average</dt>
-              <dd>{latestTrend != null ? `${formatWeight(latestTrend, wu)} ${wu}` : '—'}</dd>
+              <dd>{latestTrend != null ? `${w1(latestTrend)} ${wu}` : '—'}</dd>
             </div>
             <div>
               <dt>Weekly rate (4 wk)</dt>
-              <dd>{rate != null ? `${rate > 0 ? '+' : ''}${formatWeight(rate, wu)} ${wu}/wk` : '—'}</dd>
+              <dd>{rate != null ? `${signed(fromKg(rate, wu), 1)} ${wu}/wk` : '—'}</dd>
             </div>
             <div>
               <dt>Goal</dt>
               <dd>
-                <GoalInput goalKg={goalKg} unit={wu} onChange={(kg) => store.setSetting(SETTING_GOAL_WEIGHT, kg)} />
+                <GoalInput key={`${goalKg}-${wu}`} goalKg={goalKg} unit={wu} onChange={(kg) => store.setSetting(SETTING_GOAL_WEIGHT, kg)} />
               </dd>
             </div>
           </dl>
@@ -143,19 +152,30 @@ export function BodyPage() {
                   .slice(0, showAll ? undefined : 8)
                   .map((w) => (
                     <li key={w.id} className="list-row">
-                      <span className="grow">{new Date(w.takenAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span>
-                      <strong>
-                        {formatWeight(w.value, wu)} {wu}
+                      <span className="grow">{dateOf(w.takenAt)}</span>
+                      <strong className="num">
+                        {w1(w.value)} {wu}
                       </strong>
-                      <button className="icon-btn" aria-label="Delete weigh-in" onClick={() => store.remove('measurements', w.id)}>
+                      <button
+                        className="icon-btn"
+                        aria-label={`Delete weigh-in from ${dateOf(w.takenAt)}`}
+                        title="Delete"
+                        onClick={() => {
+                          store.remove('measurements', w.id);
+                          toast({
+                            message: `Deleted the ${w1(w.value)} ${wu} weigh-in.`,
+                            action: { label: 'Undo', onClick: () => restoreRows('measurements', [w.id]) },
+                          });
+                        }}
+                      >
                         <Icon name="trash" size={18} />
                       </button>
                     </li>
                   ))}
               </ul>
               {weights.length > 8 && (
-                <button className="link small" onClick={() => setShowAll(!showAll)}>
-                  {showAll ? 'Show fewer' : `Show all ${weights.length}`}
+                <button className="link small" onClick={() => setShowAll(!showAll)} aria-expanded={showAll}>
+                  {showAll ? 'Show fewer' : `Show all ${weights.length.toLocaleString()}`}
                 </button>
               )}
             </>
@@ -174,35 +194,50 @@ function GoalInput({ goalKg, unit, onChange }: { goalKg: number | null; unit: 'k
   const [v, setV] = useState<number | null>(goalKg != null ? +fromKg(goalKg, unit).toFixed(1) : null);
   if (!editing)
     return (
-      <button className="link" onClick={() => setEditing(true)}>
-        {goalKg != null ? `${formatWeight(goalKg, unit)} ${unit}` : 'Set goal'}
+      <button className="link" onClick={() => setEditing(true)} aria-label={goalKg != null ? `Goal ${fmt(fromKg(goalKg, unit), 1, true)} ${unit}. Edit` : 'Set a goal weight'}>
+        {goalKg != null ? `${fmt(fromKg(goalKg, unit), 1, true)} ${unit}` : 'Set goal'}
+        <Icon name="edit" size={14} />
       </button>
     );
   return (
-    <span className="row nowrap">
-      <NumberInput value={v} onChange={setV} ariaLabel={`Goal weight in ${unit}`} className="w-num" />
-      <button
-        className="small"
-        onClick={() => {
-          onChange(v && v > 0 ? toKg(v, unit) : null);
-          setEditing(false);
-        }}
-      >
-        Save
-      </button>
-    </span>
+    <form
+      className="goal-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onChange(v && v > 0 ? toKg(v, unit) : null);
+        setEditing(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') setEditing(false);
+      }}
+    >
+      <span className="inline-unit">
+        <NumberInput value={v} onChange={setV} ariaLabel={`Goal weight in ${unit}`} className="w-num" autoFocus />
+        <span>{unit}</span>
+      </span>
+      <span className="row nowrap">
+        <button type="submit" className="small primary">
+          Save
+        </button>
+        <button type="button" className="small" onClick={() => setEditing(false)}>
+          Cancel
+        </button>
+      </span>
+    </form>
   );
 }
 
 function OtherMeasurements({ today }: { today: string }) {
   const store = useStore();
   const prefs = usePrefs();
+  const toast = useToast();
   const lu = prefs.lengthUnit;
   const [kind, setKind] = useState<MeasurementKind>('waist');
   const [value, setValue] = useState<number | null>(null);
   const [day, setDay] = useState(today);
   const unitOf = (k: string) => (k === 'body_fat' ? '%' : lu);
-  const fmt = (k: string, v: number) => (k === 'body_fat' ? `${+v.toFixed(1)}` : formatLength(v, lu));
+  const show = (k: string, v: number) => (k === 'body_fat' ? v : fromCm(v, lu));
+  const label = (k: string) => (KIND_LABEL[k] ?? k).toLowerCase();
   const rows = OTHER_KINDS.map((k) => ({ kind: k, list: store.measurementsOf(k) })).filter((r) => r.list.length);
   return (
     <section className="card">
@@ -212,8 +247,14 @@ function OtherMeasurements({ today }: { today: string }) {
         onSubmit={(e) => {
           e.preventDefault();
           if (value == null || value <= 0) return;
-          store.addMeasurement(kind, kind === 'body_fat' ? value : toCm(value, lu), takenAtFor(day, today));
+          const m = store.addMeasurement(kind, kind === 'body_fat' ? value : toCm(value, lu), takenAtFor(day, today));
+          toast({
+            message: `Saved ${label(kind)}: ${fmt(value, 1)} ${unitOf(kind)}.`,
+            tone: 'success',
+            action: { label: 'Undo', onClick: () => removeRows('measurements', [m.id]) },
+          });
           setValue(null);
+          setDay(today);
         }}
       >
         <label>
@@ -232,7 +273,7 @@ function OtherMeasurements({ today }: { today: string }) {
         </label>
         <label>
           Date
-          <input type="date" value={day} max={today} onChange={(e) => setDay(e.target.value || today)} />
+          <DateField value={day} onChange={setDay} max={today} title="Measurement date" />
         </label>
         <button className="primary" type="submit" disabled={!value}>
           Save
@@ -246,21 +287,33 @@ function OtherMeasurements({ today }: { today: string }) {
             const delta = prev ? last.value - prev.value : null;
             return (
               <li key={k} className="list-row">
-                <span className="grow">
+                <span className="grow min0">
                   {KIND_LABEL[k]}
                   <br />
-                  <small className="muted">{dayOf(last.takenAt)}</small>
+                  <small className="muted">{dateOf(last.takenAt)}</small>
                 </span>
-                <strong>
-                  {fmt(k, last.value)} {unitOf(k)}
-                </strong>
-                {delta != null && (
-                  <small className="muted nowrap">
-                    {delta > 0 ? '+' : ''}
-                    {fmt(k, delta)}
-                  </small>
-                )}
-                <button className="icon-btn" aria-label={`Delete latest ${KIND_LABEL[k]}`} onClick={() => store.remove('measurements', last.id)}>
+                <span className="measure-value">
+                  <strong className="num">
+                    {fmt(show(k, last.value), 1)} {unitOf(k)}
+                  </strong>
+                  {delta != null && (
+                    <small className="muted nowrap" title="Change since the previous measurement">
+                      {signed(show(k, delta), 1)} {unitOf(k)}
+                    </small>
+                  )}
+                </span>
+                <button
+                  className="icon-btn"
+                  aria-label={`Delete latest ${label(k)} measurement`}
+                  title="Delete"
+                  onClick={() => {
+                    store.remove('measurements', last.id);
+                    toast({
+                      message: `Deleted the latest ${label(k)} measurement.`,
+                      action: { label: 'Undo', onClick: () => restoreRows('measurements', [last.id]) },
+                    });
+                  }}
+                >
                   <Icon name="trash" size={18} />
                 </button>
               </li>

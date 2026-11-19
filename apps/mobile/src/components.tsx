@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import {
   CORE_NUTRIENTS,
   MEALS,
@@ -22,6 +22,8 @@ import { searchFoods } from './foods';
 import { useStore } from './state';
 import {
   Badge,
+  Dialog,
+  DialogButton,
   Chips,
   IconButton,
   Input,
@@ -56,7 +58,11 @@ export function MacroBars({ totals, targets, compact }: { totals: NutrientMap; t
         const target = targets?.[r.key] ?? 0;
         const pct = target > 0 ? Math.round((v / target) * 100) : null;
         return (
-          <View key={r.key} accessible accessibilityLabel={`${r.name}: ${Math.round(v)} of ${Math.round(target)} grams`}>
+          <View
+            key={r.key}
+            accessible
+            accessibilityLabel={target > 0 ? `${r.name}: ${Math.round(v)} of ${Math.round(target)} grams` : `${r.name}: ${Math.round(v)} grams`}
+          >
             <View style={[styles.rowBetween, { marginBottom: 3 }]}>
               <T small bold>
                 {r.name}
@@ -67,7 +73,8 @@ export function MacroBars({ totals, targets, compact }: { totals: NutrientMap; t
                 {pct != null ? ` · ${pct}%` : ''}
               </T>
             </View>
-            <ProgressBar value={v} max={target || Math.max(v, 1)} color={r.color} height={compact ? 6 : 8} />
+            {/* Without a target there is nothing to measure against: show an empty track, not a full bar. */}
+            <ProgressBar value={target > 0 ? v : 0} max={target || 1} color={r.color} height={compact ? 6 : 8} />
           </View>
         );
       })}
@@ -157,7 +164,7 @@ export function MealHeader({
           {MEAL_LABELS[meal]}
         </T>
         <T small muted>
-          {kcal(total[N.energy])} kcal · {macroLine(total)}
+          {(total[N.energy] ?? 0) > 0 ? `${kcal(total[N.energy])} kcal · ${macroLine(total)}` : '0 kcal'}
         </T>
       </View>
       {onCopyYesterday && !!yesterdayCount && (
@@ -248,8 +255,8 @@ export function FoodSearch({
   const searching = q.trim().length > 0;
   return (
     <View style={{ flex: 1 }}>
-      <View style={[styles.row, { paddingHorizontal: 12 }]}>
-        <View style={{ flex: 1 }}>
+      <View style={{ paddingHorizontal: 12 }}>
+        <View>
           <Input
             value={q}
             onChangeText={setQ}
@@ -257,11 +264,23 @@ export function FoodSearch({
             autoFocus={autoFocus}
             autoCorrect={false}
             returnKeyType="search"
-            clearButtonMode="while-editing"
             accessibilityLabel="Search foods"
+            style={{ paddingLeft: 38, paddingRight: 44 }}
           />
+          {/* Icon, spinner and clear button sit inside the field so nothing shifts while typing. */}
+          <View pointerEvents="none" style={s.searchIcon}>
+            <Icon name="search" size={18} color={t.muted} />
+          </View>
+          <View style={s.searchRight}>
+            {busy ? (
+              <ActivityIndicator color={t.muted} />
+            ) : q ? (
+              <Pressable onPress={() => setQ('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={6} style={s.clearBtn}>
+                <Icon name="close" size={18} color={t.muted} />
+              </Pressable>
+            ) : null}
+          </View>
         </View>
-        {busy && <ActivityIndicator color={t.muted} />}
       </View>
       <FlatList
         data={searching ? results : []}
@@ -321,7 +340,7 @@ export function AmountEditor({ food, value, onChange }: { food: Pick<Food, 'serv
   const t = useTheme();
   const sv = servingsOf(food);
   const options = [
-    { value: '-1', label: 'grams' },
+    { value: '-1', label: 'Grams' },
     ...sv.map((s, i) => ({ value: String(i), label: s.label === '100 g' ? '100 g' : `${s.label} (${grams1(s.grams)} g)` })),
   ];
   const step = value.serving < 0 ? 10 : value.quantity < 1 ? 0.25 : 0.5;
@@ -397,7 +416,7 @@ export const nutrientName = (key: string) => NUTRIENT_BY_KEY[key]?.name ?? key;
 
 // ---- calendar -------------------------------------------------------------------------------------------
 
-/** Month-grid date picker in a modal. `marked` days get a dot (days with entries). */
+/** Month-grid date picker (a bottom sheet on phones, a dialog on wide screens). `marked` days get a dot. */
 export function CalendarModal({
   visible,
   value,
@@ -434,64 +453,78 @@ export function CalendarModal({
   };
   const today = todayLocal();
   const monthName = parseDay(`${month}-01`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  // Narrow weekday names, Monday first, in the device language (2024-01-01 was a Monday).
+  const weekdays = useMemo(() => Array.from({ length: 7 }, (_, i) => new Date(2024, 0, 1 + i).toLocaleDateString(undefined, { weekday: 'narrow' })), []);
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} supportedOrientations={['portrait', 'landscape']}>
-      <Pressable style={s.backdrop} onPress={onClose} accessibilityLabel="Close calendar">
-        <Pressable style={[s.calendar, { backgroundColor: t.surface, borderColor: t.border }]} onPress={() => {}}>
-          <ScrollView bounces={false} contentContainerStyle={{ flexGrow: 0 }}>
-          <T bold style={{ textAlign: 'center', marginBottom: 4 }}>
-            {title}
-          </T>
-          <View style={styles.rowBetween}>
-            <IconButton icon="chevronLeft" label="Previous month" onPress={() => shift(-1)} />
-            <T bold>{monthName}</T>
-            <IconButton icon="chevronRight" label="Next month" onPress={() => shift(1)} />
+    <Dialog
+      visible={visible}
+      onClose={onClose}
+      title={title}
+      maxWidth={400}
+      actions={
+        <>
+          <View style={{ flex: 1 }}>
+            <DialogButton title="Today" onPress={() => onPick(today)} />
           </View>
-          <View style={s.grid}>
-            {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, i) => (
-              <View key={`h${i}`} style={s.cell}>
-                <T small muted>
-                  {d}
-                </T>
-              </View>
-            ))}
-            {cells.map((day, i) => {
-              if (!day) return <View key={`e${i}`} style={s.cell} />;
-              const sel = day === value;
-              return (
-                <Pressable
-                  key={day}
-                  onPress={() => {
-                    haptic.tap();
-                    onPick(day);
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel={parseDay(day).toDateString()}
-                  accessibilityState={{ selected: sel }}
-                  style={[s.cell, { borderRadius: 22, backgroundColor: sel ? t.accent : 'transparent', borderWidth: day === today && !sel ? 1 : 0, borderColor: t.accent }]}
+          <View style={{ flex: 1 }}>
+            <DialogButton title="Cancel" onPress={onClose} />
+          </View>
+        </>
+      }
+    >
+      <View style={styles.rowBetween}>
+        <IconButton icon="chevronLeft" label="Previous month" onPress={() => shift(-1)} />
+        <T bold maxScale={1.4} style={{ fontSize: 16 }}>
+          {monthName}
+        </T>
+        <IconButton icon="chevronRight" label="Next month" onPress={() => shift(1)} />
+      </View>
+      <View style={s.grid}>
+        {weekdays.map((d, i) => (
+          <View key={`h${i}`} style={[s.cell, { height: 28 }]} importantForAccessibility="no-hide-descendants">
+            <T small muted maxScale={1.2}>
+              {d}
+            </T>
+          </View>
+        ))}
+        {cells.map((day, i) => {
+          if (!day) return <View key={`e${i}`} style={s.cell} />;
+          const sel = day === value;
+          const isToday = day === today;
+          return (
+            <Pressable
+              key={day}
+              onPress={() => {
+                haptic.tap();
+                onPick(day);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`${parseDay(day).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}${isToday ? ', today' : ''}${marked?.has(day) ? ', has entries' : ''}`}
+              accessibilityState={{ selected: sel }}
+              style={s.cell}
+            >
+              {({ pressed }) => (
+                <View
+                  style={[
+                    s.dayCircle,
+                    {
+                      backgroundColor: sel ? t.accent : pressed ? t.surface2 : 'transparent',
+                      borderWidth: isToday && !sel ? 1.5 : 0,
+                      borderColor: t.accent,
+                    },
+                  ]}
                 >
-                  <Text maxFontSizeMultiplier={1.2} style={{ color: sel ? t.onAccent : t.text, fontSize: 15 }}>
+                  <Text maxFontSizeMultiplier={1.2} style={{ color: sel ? t.onAccent : isToday ? t.accent : t.text, fontSize: 15, fontWeight: sel || isToday ? '700' : '400' }}>
                     {Number(day.slice(8))}
                   </Text>
-                  {marked?.has(day) && <View style={[s.dot, { backgroundColor: sel ? t.onAccent : t.accent }]} />}
-                </Pressable>
-              );
-            })}
-          </View>
-          <View style={[styles.rowBetween, { marginTop: 6 }]}>
-            <Pressable onPress={() => onPick(today)} style={s.link} accessibilityRole="button">
-              <T color={t.accent} bold>
-                Today
-              </T>
+                  <View style={[s.dot, { backgroundColor: marked?.has(day) ? (sel ? t.onAccent : t.accent) : 'transparent' }]} />
+                </View>
+              )}
             </Pressable>
-            <Pressable onPress={onClose} style={s.link} accessibilityRole="button">
-              <T color={t.accent}>Cancel</T>
-            </Pressable>
-          </View>
-          </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+          );
+        })}
+      </View>
+    </Dialog>
   );
 }
 
@@ -523,7 +556,7 @@ export function DayNav({ day, onChange, label: lbl, marked }: { day: string; onC
   );
 }
 
-/** Cross-platform text prompt (Alert.prompt is iOS-only). */
+/** Text prompt in the app's own dialog (the system text prompt is iOS-only and unthemed). */
 export function PromptModal({
   visible,
   title,
@@ -543,92 +576,106 @@ export function PromptModal({
   onSubmit: (text: string) => void;
   onClose: () => void;
 }) {
-  const t = useTheme();
   const [text, setText] = useState(initial);
   useEffect(() => {
     if (visible) setText(initial);
   }, [visible, initial]);
+  const value = text.trim();
+  const submit = () => {
+    if (value) onSubmit(value);
+  };
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} supportedOrientations={['portrait', 'landscape']}>
-      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
-        <Pressable style={s.backdrop} onPress={onClose}>
-          <Pressable style={[s.calendar, { backgroundColor: t.surface, borderColor: t.border, padding: 16 }]} onPress={() => {}}>
-            <T bold style={{ fontSize: 17 }}>
-              {title}
-            </T>
-            {message && (
-              <T small muted style={{ marginTop: 4 }}>
-                {message}
-              </T>
-            )}
-            <Input value={text} onChangeText={setText} placeholder={placeholder} autoFocus onSubmitEditing={() => text.trim() && onSubmit(text.trim())} />
-            <View style={[styles.row, { justifyContent: 'flex-end', marginTop: 8 }]}>
-              <Pressable onPress={onClose} style={s.link} accessibilityRole="button">
-                <T color={t.accent}>Cancel</T>
-              </Pressable>
-              <Pressable onPress={() => text.trim() && onSubmit(text.trim())} style={s.link} accessibilityRole="button" disabled={!text.trim()}>
-                <T color={t.accent} bold style={{ opacity: text.trim() ? 1 : 0.4 }}>
-                  {confirm}
-                </T>
-              </Pressable>
-            </View>
-          </Pressable>
-        </Pressable>
-      </KeyboardAvoidingView>
-    </Modal>
+    <Dialog
+      visible={visible}
+      onClose={onClose}
+      title={title}
+      message={message}
+      actions={
+        <>
+          <View style={{ flex: 1 }}>
+            <DialogButton title="Cancel" onPress={onClose} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <DialogButton title={confirm} variant="primary" onPress={submit} disabled={!value} />
+          </View>
+        </>
+      }
+    >
+      <Input
+        value={text}
+        onChangeText={setText}
+        placeholder={placeholder}
+        accessibilityLabel={title}
+        autoFocus
+        maxLength={200}
+        returnKeyType="done"
+        onSubmitEditing={submit}
+        style={{ marginTop: 8 }}
+      />
+    </Dialog>
   );
 }
 
-/** A list of choices in a small modal (Android alerts allow only three buttons). */
+/** A list of choices in the app's own dialog. */
 export function ChoiceModal<V extends string>({
   visible,
   title,
   options,
   onPick,
   onClose,
+  value,
 }: {
   visible: boolean;
   title: string;
   options: { value: V; label: string }[];
   onPick: (v: V) => void;
   onClose: () => void;
+  value?: V;
 }) {
   const t = useTheme();
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} supportedOrientations={['portrait', 'landscape']}>
-      <Pressable style={s.backdrop} onPress={onClose}>
-        <Pressable style={[s.calendar, { backgroundColor: t.surface, borderColor: t.border }]} onPress={() => {}}>
-          <ScrollView bounces={false}>
-            <T bold style={{ fontSize: 17, marginBottom: 6, paddingHorizontal: 8 }}>
-              {title}
-            </T>
-            {options.map((o) => (
-              <Pressable
-                key={o.value}
-                onPress={() => onPick(o.value)}
-                accessibilityRole="button"
-                style={({ pressed }) => [styles.listRow, { backgroundColor: pressed ? t.surface2 : 'transparent' }]}
-              >
-                <T>{o.label}</T>
-              </Pressable>
-            ))}
-            <Pressable onPress={onClose} style={[s.link, { alignSelf: 'flex-end' }]} accessibilityRole="button">
-              <T color={t.accent}>Cancel</T>
+    <Dialog
+      visible={visible}
+      onClose={onClose}
+      title={title}
+      actions={
+        <View style={{ flex: 1 }}>
+          <DialogButton title="Cancel" onPress={onClose} />
+        </View>
+      }
+    >
+      <View style={{ marginTop: 4 }}>
+        {options.map((o) => {
+          const sel = o.value === value;
+          return (
+            <Pressable
+              key={o.value}
+              onPress={() => {
+                haptic.tap();
+                onPick(o.value);
+              }}
+              accessibilityRole="button"
+              accessibilityState={{ selected: sel }}
+              style={({ pressed }) => [styles.listRow, { backgroundColor: pressed ? t.surface2 : sel ? t.accentSoft : 'transparent' }]}
+            >
+              <T style={{ flex: 1 }}>{o.label}</T>
+              {sel && <Icon name="check" size={18} color={t.accent} />}
             </Pressable>
-          </ScrollView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+          );
+        })}
+      </View>
+    </Dialog>
   );
 }
 
 const s = StyleSheet.create({
   check: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center', padding: 16 },
-  calendar: { width: '100%', maxWidth: 380, maxHeight: '100%', borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, padding: 12 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap' },
-  cell: { width: `${100 / 7}%`, height: 44, alignItems: 'center', justifyContent: 'center' },
-  dot: { width: 4, height: 4, borderRadius: 2, marginTop: 2 },
-  link: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 12 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 },
+  cell: { width: `${100 / 7}%`, height: 46, alignItems: 'center', justifyContent: 'center' },
+  dayCircle: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
+  dot: { width: 4, height: 4, borderRadius: 2, marginTop: 1 },
   dayBtn: { flex: 1, justifyContent: 'center', minHeight: 44, paddingHorizontal: 8 },
+  searchIcon: { position: 'absolute', left: 12, top: 4, bottom: 4, justifyContent: 'center' },
+  searchRight: { position: 'absolute', right: 0, top: 4, bottom: 4, width: 44, alignItems: 'center', justifyContent: 'center' },
+  clearBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
 });

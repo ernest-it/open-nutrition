@@ -38,6 +38,7 @@ import {
   kcal,
   styles,
   useTheme,
+  useOnce,
   useToast,
 } from '../ui';
 
@@ -104,6 +105,7 @@ export function ProfileForm({ submitLabel, onSaved }: { submitLabel: string; onS
   const [height, setHeight] = useState<number | null>(+fromCm(p.heightCm, prefs.lengthUnit).toFixed(1));
   const [splitKey, setSplitKey] = useState(() => SPLITS.find((x) => sameSplit(x.split, p.macroSplit))?.value ?? 'custom');
   const set = (patch: Partial<Profile>) => setP((cur) => ({ ...cur, ...patch }));
+  const once = useOnce();
   const wu = prefs.weightUnit;
 
   const weightKg = weight != null && weight > 0 ? toKg(weight, wu) : null;
@@ -179,7 +181,7 @@ export function ProfileForm({ submitLabel, onSaved }: { submitLabel: string; onS
           onChange={(v) => set({ proteinGPerKg: v ? 1.6 : null })}
         />
         {p.proteinGPerKg != null && (
-          <NumField label={`Protein per ${wu === 'kg' ? 'kg' : 'kg'} body weight`} unit="g/kg" value={p.proteinGPerKg} onChange={(v) => set({ proteinGPerKg: v ?? 0 })} />
+          <NumField label="Protein per kg of body weight" unit="g/kg" value={p.proteinGPerKg} onChange={(v) => set({ proteinGPerKg: v ?? 0 })} />
         )}
         <T small muted style={{ marginTop: 6 }}>
           Split of calories (protein / carbs / fat, %)
@@ -228,11 +230,13 @@ export function ProfileForm({ submitLabel, onSaved }: { submitLabel: string; onS
         title={submitLabel}
         variant="primary"
         disabled={!valid}
-        onPress={() => {
-          applyProfile(store, full, weightKg!);
-          haptic.success();
-          onSaved();
-        }}
+        onPress={() =>
+          once.run(() => {
+            applyProfile(store, full, weightKg!);
+            haptic.success();
+            onSaved();
+          })
+        }
       />
     </View>
   );
@@ -280,6 +284,7 @@ export function TargetsScreen({ onDone }: { onDone: () => void }) {
   const prefs = usePrefs();
   const nav = useNav();
   const toast = useToast();
+  const once = useOnce();
   const current = store.targetsOn(store.today());
   const [values, setValues] = useState<NutrientMap>(() => ({ ...(current?.nutrients ?? {}) }));
   const [water, setWater] = useState<number | null>(current?.waterMl != null ? Math.round(fromMl(current.waterMl, prefs.waterUnit)) : null);
@@ -306,13 +311,14 @@ export function TargetsScreen({ onDone }: { onDone: () => void }) {
       <Button
         title="Save targets"
         variant="primary"
-        onPress={() => {
+        icon="check"
+        onPress={() => once.run(() => {
           const waterMl = water == null ? null : toMl(water, prefs.waterUnit);
           store.setTargets(values, waterMl);
           haptic.success();
           toast('Targets saved');
           onDone();
-        }}
+        })}
       />
     </Screen>
   );

@@ -60,7 +60,9 @@ export interface AddNav {
   pop: () => void;
   replace: (r: AddRoute) => void;
   /** Close the sheet (after logging, pass a confirmation message). */
-  close: (message?: string) => void;
+  close: (message?: string, undo?: () => void) => void;
+  /** While set, hardware back calls this instead of leaving the screen (e.g. to confirm discarding an AI estimate). */
+  setBackGuard: (fn: (() => void) | null) => void;
 }
 
 export const AddNavContext = createContext<AddNav | null>(null);

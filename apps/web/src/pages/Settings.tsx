@@ -24,10 +24,11 @@ import {
   type Prefs,
   type Profile,
 } from '@open-nutrition/shared';
-import { api, errorMessage, loadAuth, setPrefs, usePrefs, useStore, store } from '../state';
+import { api, ApiError, errorMessage, loadAuth, setPrefs, usePrefs, useStore, store } from '../state';
 import { getAiStatus, type AiStatus } from '../foodApi';
 import { AiPrivacyNote, formatUsd, modelLabel } from './AiLog';
-import { download, kcal, NumberInput, Segmented } from '../ui';
+import { download, Icon, kcal, Modal, NumberInput, Segmented } from '../ui';
+import { InlineError, Spinner, useConfirm, useToast } from '../feedback';
 
 interface SessionInfo {
   id: string;
@@ -106,6 +107,7 @@ function TargetsSection() {
   const [draft, setDraft] = useState<NutrientMap>(current?.nutrients ?? {});
   const [waterMl, setWaterMl] = useState<number | null>(current?.waterMl ?? 2000);
   const [msg, setMsg] = useState<string | null>(null);
+  const toast = useToast();
   // Until the user edits, follow what the store has (the first sync may land after this page mounts).
   const dirty = useRef(false);
   const latestKg = s.latestWeightKg();
@@ -139,7 +141,9 @@ function TargetsSection() {
     }
     const clean = Object.fromEntries(Object.entries(draft).filter(([, v]) => Number.isFinite(v) && v >= 0));
     s.setTargets(clean, waterMl);
-    setMsg('Saved. New targets apply from today; past days keep the targets they had.');
+    dirty.current = false;
+    setMsg(null);
+    toast({ message: 'Targets saved. They apply from today; past days keep the targets they had.', tone: 'success' });
   }
 
   const setDraftKey = (k: string, v: number | null) =>
@@ -221,6 +225,7 @@ function TargetsSection() {
           Resting energy ≈ {kcal(bmrMifflinStJeor(p, weightKg!, age))} kcal · maintenance ≈ {kcal(tdee(p, weightKg!, age))} kcal/day
         </p>
       )}
+      {!canCalc && <p className="muted small">Fill in your height, weight and birth year{p.proteinGPerKg == null && splitSum !== 100 ? ', and make the macro split add up to 100%' : ''} to get suggestions.</p>}
       <button className="block" disabled={!canCalc} onClick={calculate}>
         Suggest targets
       </button>
@@ -251,7 +256,11 @@ function TargetsSection() {
           {kcal(draft[N.energy])} kcal budget.
         </p>
       )}
-      {msg && <p className="note">{msg}</p>}
+      {msg && (
+        <p className="note" role="status">
+          {msg}
+        </p>
+      )}
       <button className="primary block" onClick={save} disabled={draft[N.energy] == null}>
         Save profile &amp; targets
       </button>
@@ -310,7 +319,7 @@ function AiSection() {
             <input type="checkbox" checked={prefs.aiEnabled} onChange={(e) => setPrefs({ aiEnabled: e.target.checked })} />
             <span>Show “Photo / describe” when adding food</span>
           </label>
-          <div className="form-grid">
+          <div className="form-grid stack-sm">
             <label>
               Model
               <select value={prefs.aiModel} onChange={(e) => setPrefs({ aiModel: e.target.value })}>
@@ -346,7 +355,10 @@ function AiSection() {
 
 function DataSection() {
   const s = useStore();
-  const [msg, setMsg] = useState<string | null>(null);
+  const toast = useToast();
+  const [backingUp, setBackingUp] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const pending = s.pendingCount();
   return (
     <section className="card settings-section" id="data">
       <h2>Your data</h2>
@@ -355,53 +367,90 @@ function DataSection() {
           onClick={() => {
             const entries = s.all('diaryEntries');
             download(`open-nutrition-diary-${s.today()}.csv`, diaryToCsv(entries), 'text/csv');
-            setMsg(`Exported ${entries.length} diary entries.`);
+            toast({ message: `Exported ${entries.length.toLocaleString()} diary ${entries.length === 1 ? 'entry' : 'entries'}.`, tone: 'success' });
           }}
         >
           Export diary (CSV)
         </button>
         <button
+          disabled={backingUp}
           onClick={async () => {
             const auth = loadAuth();
+            setBackingUp(true);
             try {
               const res = await fetch(`${auth?.baseUrl ?? ''}/api/v1/export/json`, { headers: { authorization: `Bearer ${auth?.token ?? ''}` } });
               if (!res.ok) throw new Error(`HTTP ${res.status}`);
-              download('open-nutrition-backup.json', await res.blob());
-              setMsg(null);
+              download(`open-nutrition-backup-${s.today()}.json`, await res.blob());
+              toast({ message: 'Backup downloaded.', tone: 'success' });
             } catch (e) {
-              setMsg(`Backup failed: ${errorMessage(e)}`);
+              toast({ message: `Backup failed: ${errorMessage(e)}`, tone: 'error' });
+            } finally {
+              setBackingUp(false);
             }
           }}
         >
-          Full backup (JSON)
+          {backingUp ? (
+            <>
+              <Spinner /> Preparing backup…
+            </>
+          ) : (
+            'Full backup (JSON)'
+          )}
         </button>
       </div>
-      {msg && <p className="muted small">{msg}</p>}
       <h3>Sync</h3>
       <p className="muted small">
-        {s.pendingCount()} change{s.pendingCount() === 1 ? '' : 's'} waiting · last synced{' '}
-        {s.lastSyncAt ? new Date(s.lastSyncAt).toLocaleTimeString() : 'not yet'}
-        {s.lastSyncError && <span className="error"> · {s.lastSyncError}</span>}
+        {pending ? `${pending.toLocaleString()} change${pending === 1 ? '' : 's'} waiting to sync` : 'Everything is synced'} · last synced{' '}
+        {s.lastSyncAt ? new Date(s.lastSyncAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : 'not yet'}
       </p>
-      <button onClick={() => void s.sync().catch(() => {})}>Sync now</button>
+      <InlineError>{s.lastSyncError}</InlineError>
+      <button
+        disabled={syncing}
+        onClick={async () => {
+          setSyncing(true);
+          try {
+            await s.sync();
+            toast({ message: 'Synced with the server.', tone: 'success' });
+          } catch (e) {
+            toast({ message: `Sync failed: ${errorMessage(e)}`, tone: 'error' });
+          } finally {
+            setSyncing(false);
+          }
+        }}
+      >
+        {syncing ? (
+          <>
+            <Spinner /> Syncing…
+          </>
+        ) : (
+          'Sync now'
+        )}
+      </button>
     </section>
   );
 }
 
 // ---------------------------------------------------------------------------
 
+const fmtTime = (t: number) => new Date(t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
 function AccountSection({ username, onLogout }: { username: string; onLogout: () => void }) {
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const ask = useConfirm();
+  const toast = useToast();
+  const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
   const [sessError, setSessError] = useState<string | null>(null);
-  const [newToken, setNewToken] = useState<string | null>(null);
+  const [tokenOpen, setTokenOpen] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
   const [pw, setPw] = useState({ current: '', next: '' });
-  const [pwMsg, setPwMsg] = useState<string | null>(null);
+  const [pwError, setPwError] = useState<string | null>(null);
+  const [pwBusy, setPwBusy] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const mounted = useRef(true);
 
   const loadSessions = () =>
     api<SessionInfo[]>('/api/v1/sessions')
       .then((x) => mounted.current && (setSessions(x), setSessError(null)))
-      .catch((e) => mounted.current && setSessError(errorMessage(e)));
+      .catch((e) => mounted.current && (setSessions((cur) => cur ?? []), setSessError(errorMessage(e))));
   useEffect(() => {
     mounted.current = true;
     void loadSessions();
@@ -409,6 +458,57 @@ function AccountSection({ username, onLogout }: { username: string; onLogout: ()
       mounted.current = false;
     };
   }, []);
+
+  async function revoke(x: SessionInfo) {
+    const ok = await ask({
+      title: 'Sign out this device?',
+      body: (
+        <>
+          “{x.name}” will be signed out and has to sign in again. If it is an API token, scripts using it stop working.
+        </>
+      ),
+      confirmLabel: 'Sign out device',
+      destructive: true,
+    });
+    if (!ok) return;
+    setRevoking(x.id);
+    try {
+      await api(`/api/v1/sessions/${x.id}`, { method: 'DELETE' });
+      toast({ message: `Signed out “${x.name}”.`, tone: 'success' });
+      await loadSessions();
+    } catch (e) {
+      toast({ message: `Couldn't sign out that device: ${errorMessage(e)}`, tone: 'error' });
+    } finally {
+      setRevoking(null);
+    }
+  }
+
+  async function signOut() {
+    setSigningOut(true);
+    await store.sync().catch(() => {});
+    const unsynced = store.pendingCount();
+    setSigningOut(false);
+    const ok = await ask({
+      title: 'Sign out?',
+      body: unsynced ? (
+        <>
+          <strong>
+            {unsynced} change{unsynced === 1 ? " hasn't" : "s haven't"} reached the server yet
+          </strong>{' '}
+          and will be lost if you sign out now. Check your connection and try “Sync now” first.
+        </>
+      ) : (
+        'Your diary stays on the server. Sign in again any time to pick up where you left off.'
+      ),
+      confirmLabel: unsynced ? 'Sign out anyway' : 'Sign out',
+      destructive: unsynced > 0,
+    });
+    if (!ok) return;
+    setSigningOut(true);
+    await api('/api/v1/auth/logout', { method: 'POST' }).catch(() => {});
+    await store.reset();
+    onLogout();
+  }
 
   return (
     <section className="card settings-section" id="account">
@@ -418,43 +518,41 @@ function AccountSection({ username, onLogout }: { username: string; onLogout: ()
       </p>
 
       <h3>Devices &amp; sessions</h3>
-      {sessError && <p className="error small">{sessError}</p>}
-      <ul className="list">
-        {sessions.map((x) => (
-          <li key={x.id} className="list-row">
-            <span className="grow min0">
-              <span className="ellipsis">{x.name}</span> {x.current && <span className="badge">this device</span>}
-              <br />
-              <small className="muted">last used {new Date(x.lastUsedAt).toLocaleString()}</small>
-            </span>
-            {!x.current && (
-              <button className="small danger" onClick={() => void api(`/api/v1/sessions/${x.id}`, { method: 'DELETE' }).then(loadSessions)}>
-                Sign out
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-      <button
-        className="small"
-        onClick={async () => {
-          const name = prompt('Name for the token (e.g. "backup script")');
-          if (!name) return;
-          try {
-            const r = await api<{ token: string }>('/api/v1/tokens', { method: 'POST', body: JSON.stringify({ name }) });
-            setNewToken(r.token);
-            void loadSessions();
-          } catch (e) {
-            setSessError(errorMessage(e));
-          }
-        }}
-      >
-        Create API token
-      </button>
-      {newToken && (
-        <p className="small">
-          Copy it now; it won't be shown again: <code>{newToken}</code>
+      <InlineError>{sessError}</InlineError>
+      {sessions == null ? (
+        <p className="muted small">
+          <Spinner /> Loading devices…
         </p>
+      ) : (
+        sessions.length > 0 && (
+          <ul className="list">
+            {sessions.map((x) => (
+              <li key={x.id} className="list-row">
+                <span className="grow min0">
+                  <span className="session-name">
+                    <span className="ellipsis">{x.name}</span>
+                    {x.current && <span className="badge">this device</span>}
+                  </span>
+                  <small className="muted">Last used {fmtTime(x.lastUsedAt)}</small>
+                </span>
+                {!x.current && (
+                  <button className="small danger" disabled={revoking === x.id} onClick={() => void revoke(x)}>
+                    {revoking === x.id ? <Spinner /> : null} Sign out
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )
+      )}
+      <button className="small" onClick={() => setTokenOpen(true)}>
+        <Icon name="plus" size={16} /> Create API token
+      </button>
+      {tokenOpen && (
+        <TokenDialog
+          onClose={() => setTokenOpen(false)}
+          onCreated={() => void loadSessions()}
+        />
       )}
 
       <h3>Change password</h3>
@@ -462,42 +560,164 @@ function AccountSection({ username, onLogout }: { username: string; onLogout: ()
         className="form-grid"
         onSubmit={async (e) => {
           e.preventDefault();
+          if (pwBusy) return;
+          setPwError(null);
+          if (pw.next.length < 8) return setPwError('The new password needs at least 8 characters.');
+          setPwBusy(true);
           try {
             await api('/api/v1/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword: pw.current, newPassword: pw.next }) });
             setPw({ current: '', next: '' });
-            setPwMsg('Password changed. Other devices were signed out.');
+            toast({ message: 'Password changed. Other devices were signed out.', tone: 'success' });
             void loadSessions();
           } catch (err) {
-            setPwMsg(errorMessage(err));
+            setPwError(err instanceof ApiError && err.status === 401 ? 'The current password is wrong.' : errorMessage(err));
+          } finally {
+            setPwBusy(false);
           }
         }}
       >
         <label>
           Current password
-          <input type="password" autoComplete="current-password" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} required />
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={pw.current}
+            onChange={(e) => setPw({ ...pw, current: e.target.value })}
+            required
+          />
         </label>
         <label>
           New password
-          <input type="password" autoComplete="new-password" minLength={8} value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} required />
+          <input
+            type="password"
+            autoComplete="new-password"
+            minLength={8}
+            value={pw.next}
+            onChange={(e) => setPw({ ...pw, next: e.target.value })}
+            placeholder="At least 8 characters"
+            required
+          />
         </label>
-        <button type="submit" className="span-2">
-          Change password
+        {pwError && <InlineError className="span-2">{pwError}</InlineError>}
+        <button type="submit" className="span-2" disabled={pwBusy || !pw.current || !pw.next}>
+          {pwBusy ? (
+            <>
+              <Spinner /> Changing…
+            </>
+          ) : (
+            'Change password'
+          )}
         </button>
       </form>
-      {pwMsg && <p className="muted small">{pwMsg}</p>}
 
-      <button
-        className="danger block"
-        onClick={async () => {
-          await store.sync().catch(() => {});
-          await api('/api/v1/auth/logout', { method: 'POST' }).catch(() => {});
-          await store.reset();
-          onLogout();
-        }}
-      >
-        Sign out
+      <button className="danger block" disabled={signingOut} onClick={() => void signOut()}>
+        {signingOut ? (
+          <>
+            <Spinner /> Signing out…
+          </>
+        ) : (
+          'Sign out'
+        )}
       </button>
     </section>
+  );
+}
+
+function TokenDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function create(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (busy || !name.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api<{ token: string }>('/api/v1/tokens', { method: 'POST', body: JSON.stringify({ name: name.trim() }) });
+      setToken(r.token);
+      onCreated();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={token ? 'Your new API token' : 'Create API token'}
+      variant="compact"
+      onClose={onClose}
+      footer={
+        token ? (
+          <>
+            <span className="spacer" />
+            <button className="primary" onClick={onClose}>
+              Done
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="spacer" />
+            <button onClick={onClose}>Cancel</button>
+            <button className="primary" disabled={busy || !name.trim()} onClick={() => void create()}>
+              {busy ? (
+                <>
+                  <Spinner /> Creating…
+                </>
+              ) : (
+                'Create token'
+              )}
+            </button>
+          </>
+        )
+      }
+    >
+      {token ? (
+        <>
+          <p className="note">Copy it now. For your security it won't be shown again.</p>
+          <div className="token-box">
+            <code>{token}</code>
+            <button
+              className="small"
+              data-autofocus
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(token);
+                  setCopied(true);
+                } catch {
+                  setCopied(false);
+                }
+              }}
+            >
+              <Icon name={copied ? 'check' : 'copy'} size={16} /> {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <p className="muted small">
+            Send it as <code>Authorization: Bearer …</code>. You can revoke it any time under Devices &amp; sessions.
+          </p>
+        </>
+      ) : (
+        <form onSubmit={create}>
+          <p className="muted small">API tokens let scripts and other tools (like the MCP endpoint) read and write your diary.</p>
+          <label>
+            Name
+            <input
+              autoFocus
+              value={name}
+              maxLength={100}
+              placeholder="e.g. backup script"
+              onChange={(e) => setName(e.target.value)}
+              aria-invalid={!!error}
+            />
+          </label>
+          <InlineError>{error}</InlineError>
+        </form>
+      )}
+    </Modal>
   );
 }
 

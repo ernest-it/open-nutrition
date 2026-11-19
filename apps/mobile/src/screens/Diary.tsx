@@ -1,11 +1,11 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
-import { Alert, PanResponder, ScrollView, SectionList, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { BackHandler, PanResponder, ScrollView, SectionList, StyleSheet, View } from 'react-native';
 import { MEALS, N, addDays, type DiaryEntry, type Meal } from '@open-nutrition/shared';
 import { CalendarModal, ChoiceModal, DayNav, EntryRow, MacroBars, MealHeader, PromptModal } from '../components';
 import { MAX_WIDE_WIDTH, useLayout } from '../layout';
 import { useNav } from '../nav';
-import { useStore, useToday } from '../state';
-import { Button, Card, Empty, MEAL_LABELS, T, formatDay, haptic, kcal, styles, useTheme, useToast } from '../ui';
+import { removeWithUndo, useStore, useToday } from '../state';
+import { Button, Card, Empty, IconButton, MEAL_LABELS, T, formatDay, haptic, kcal, styles, useTheme, useToast } from '../ui';
 import { EntryEditor } from './Entry';
 
 let lastDiaryDay: string | null = null;
@@ -68,12 +68,38 @@ export function DiaryScreen() {
   };
 
   const copyYesterday = (meal: Meal) => {
-    const n = store.copyMealFromYesterday(day, meal).length;
+    const copied = store.copyMealFromYesterday(day, meal);
     haptic.success();
-    toast(`Copied ${n} item${n === 1 ? '' : 's'} from the day before`);
+    toast({
+      message: `Copied ${copied.length} item${copied.length === 1 ? '' : 's'} from the day before`,
+      action: { label: 'Undo', onPress: () => copied.forEach((e) => store.remove('diaryEntries', e.id)) },
+    });
   };
 
+  // Hardware back leaves selection mode before it leaves the screen.
+  useEffect(() => {
+    if (!selecting) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setSelected(new Set());
+      return true;
+    });
+    return () => sub.remove();
+  }, [selecting]);
+  const [toolbarH, setToolbarH] = useState(140);
+  // Keep the last calendar mode while the dialog fades out (the title must not flip).
+  const calModeRef = useRef<'copy' | 'move'>('copy');
+  if (dialog === 'copy' || dialog === 'move') calModeRef.current = dialog;
+  const calMode = calModeRef.current;
+
   const ids = [...selected];
+  const count = (n: number) => `${n} entr${n === 1 ? 'y' : 'ies'}`;
+  const deleteSelected = () => {
+    const undo = removeWithUndo('diaryEntries', ids);
+    if (openId && selected.has(openId)) setOpenId(null);
+    setSelected(new Set());
+    haptic.warn();
+    toast({ message: `Deleted ${count(ids.length)}`, action: { label: 'Undo', onPress: undo } });
+  };
   const header = (
     <View>
       <DayNav day={day} onChange={setDay} label={formatDay(day, !tiny)} marked={marked} />
@@ -101,7 +127,7 @@ export function DiaryScreen() {
         sections={sections}
         keyExtractor={(e) => e.id}
         stickySectionHeadersEnabled={false}
-        contentContainerStyle={{ padding: tiny ? 12 : 16, paddingBottom: selecting ? 120 : 32 }}
+        contentContainerStyle={{ padding: tiny ? 12 : 16, paddingBottom: selecting ? toolbarH + 24 : 32 }}
         ListHeaderComponent={header}
         renderSectionHeader={({ section }) => {
           const yCount = yesterday.filter((e) => e.meal === section.meal).length;
@@ -138,53 +164,40 @@ export function DiaryScreen() {
           section.data.length ? <View style={{ height: 10 }} /> : (
             <View style={[s.item, s.last, { borderColor: t.border, backgroundColor: t.surface, marginBottom: 10 }]}>
               <T small muted style={{ padding: 8 }}>
-                Nothing logged.
+                Nothing logged yet.
               </T>
             </View>
           )
         }
       />
       {selecting && (
-        <View style={[s.toolbar, { backgroundColor: t.surface, borderColor: t.border }]}>
-          <T small bold style={{ width: '100%', textAlign: 'center' }}>
-            {selected.size} selected
-          </T>
-          <Button small icon="copy" title="Copy to…" onPress={() => setDialog('copy')} />
-          <Button small icon="move" title="Move to…" onPress={() => setDialog('move')} />
-          <Button small icon="diary" title="Meal…" onPress={() => setDialog('meal')} />
-          <Button small icon="bookmark" title="Save as meal" onPress={() => setDialog('save')} />
-          <Button
-            small
-            icon="trash"
-            variant="danger"
-            title="Delete"
-            onPress={() =>
-              Alert.alert(`Delete ${selected.size} entr${selected.size === 1 ? 'y' : 'ies'}?`, undefined, [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Delete',
-                  style: 'destructive',
-                  onPress: () => {
-                    ids.forEach((id) => store.remove('diaryEntries', id));
-                    setSelected(new Set());
-                    haptic.warn();
-                  },
-                },
-              ])
-            }
-          />
-          <Button small variant="ghost" title="Cancel" onPress={() => setSelected(new Set())} />
+        <View
+          onLayout={(e) => setToolbarH(e.nativeEvent.layout.height)}
+          style={[s.toolbar, { backgroundColor: t.surface, borderColor: t.border }]}
+          accessibilityLabel="Selection actions"
+        >
+          <View style={[styles.rowBetween, { width: '100%', paddingLeft: 8 }]}>
+            <T bold>{selected.size} selected</T>
+            <IconButton icon="close" label="Cancel selection" color={t.muted} onPress={() => setSelected(new Set())} />
+          </View>
+          <View style={s.toolbarActions}>
+            <Button small icon="copy" title="Copy to…" onPress={() => setDialog('copy')} />
+            <Button small icon="move" title="Move to…" onPress={() => setDialog('move')} />
+            <Button small icon="diary" title="Meal…" onPress={() => setDialog('meal')} />
+            <Button small icon="bookmark" title="Save as meal" onPress={() => setDialog('save')} />
+            <Button small icon="trash" variant="danger" title="Delete" onPress={deleteSelected} />
+          </View>
         </View>
       )}
       <CalendarModal
         visible={dialog === 'copy' || dialog === 'move'}
-        title={dialog === 'copy' ? 'Copy selected to…' : 'Move selected to…'}
+        title={calMode === 'copy' ? `Copy ${count(ids.length)} to…` : `Move ${count(ids.length)} to…`}
         value={day}
         onClose={() => setDialog(null)}
         onPick={(d) => {
           if (dialog === 'copy') store.copyEntries(ids, { day: d });
           else ids.forEach((id) => store.moveEntry(id, { day: d }));
-          toast(`${dialog === 'copy' ? 'Copied' : 'Moved'} ${ids.length} to ${formatDay(d)}`);
+          toast(`${dialog === 'copy' ? 'Copied' : 'Moved'} ${count(ids.length)} to ${formatDay(d)}`);
           setDialog(null);
           setSelected(new Set());
           haptic.success();
@@ -192,11 +205,12 @@ export function DiaryScreen() {
       />
       <ChoiceModal
         visible={dialog === 'meal'}
-        title="Move selected to meal"
+        title={`Move ${count(ids.length)} to`}
         options={MEALS.map((m) => ({ value: m, label: MEAL_LABELS[m] }))}
         onClose={() => setDialog(null)}
         onPick={(m) => {
           ids.forEach((id) => store.moveEntry(id, { meal: m }));
+          toast(`Moved ${count(ids.length)} to ${MEAL_LABELS[m].toLowerCase()}`);
           setDialog(null);
           setSelected(new Set());
           haptic.success();
@@ -249,6 +263,7 @@ const s = StyleSheet.create({
   section: { borderTopLeftRadius: 14, borderTopRightRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderBottomWidth: 0, paddingHorizontal: 8, paddingBottom: 4, marginTop: 6 },
   item: { borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth, paddingHorizontal: 8 },
   last: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomLeftRadius: 14, borderBottomRightRadius: 14, paddingBottom: 6 },
+  toolbarActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'center' },
   toolbar: {
     position: 'absolute',
     left: 8,
@@ -257,9 +272,8 @@ const s = StyleSheet.create({
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
     padding: 8,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
+    paddingTop: 2,
+    gap: 4,
     justifyContent: 'center',
     elevation: 6,
     shadowColor: '#000',

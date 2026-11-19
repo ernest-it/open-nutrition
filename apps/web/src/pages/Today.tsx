@@ -1,8 +1,8 @@
-import { dayOf, formatWater, fromMl, MEALS, N, parseDay, toMl } from '@open-nutrition/shared';
+import { dayOf, fromMl, MEALS, N, parseDay, toMl } from '@open-nutrition/shared';
 import { usePrefs, useStore } from '../state';
 import { CalorieRing } from '../charts';
 import { MealSection } from '../components';
-import { Bar, grams, Icon, kcal } from '../ui';
+import { Bar, fmt, grams, Icon, kcal } from '../ui';
 
 const MACROS = [
   [N.protein, 'Protein', 'm-p'],
@@ -103,6 +103,7 @@ export function WaterCard({ day, goalMl }: { day: string; goalMl: number | null 
     .filter((m) => dayOf(m.takenAt) === day)
     .at(-1);
   const u = unit === 'ml' ? 'ml' : 'fl oz';
+  const w = (v: number) => fmt(fromMl(v, unit), unit === 'ml' ? 0 : 1);
   return (
     <section className="card water">
       <div className="water-head">
@@ -110,16 +111,17 @@ export function WaterCard({ day, goalMl }: { day: string; goalMl: number | null 
           <Icon name="drop" size={20} /> Water
         </h3>
         <span className="muted">
-          {formatWater(ml, unit)} / {formatWater(goal, unit)} {u}
+          {w(ml)} / {w(goal)} {u}
         </span>
       </div>
+      <Bar value={ml} max={goal} label={`Water: ${w(ml)} of ${w(goal)} ${u}`} className="sr-only" />
       <div className="glasses" aria-hidden="true">
         {Array.from({ length: Math.min(glasses, 16) }, (_, i) => (
           <i key={i} className={i < filled ? 'on' : ''} />
         ))}
       </div>
       <div className="row">
-        <button className="icon-btn" disabled={!lastToday} onClick={() => lastToday && store.remove('measurements', lastToday.id)} aria-label="Undo last drink">
+        <button className="icon-btn" disabled={!lastToday} onClick={() => lastToday && store.remove('measurements', lastToday.id)} aria-label="Remove last drink" title="Remove last drink">
           <Icon name="minus" />
         </button>
         <button className="grow" onClick={() => store.addWater(step, day)}>

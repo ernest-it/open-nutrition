@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { addDays, MEALS, parseDay, todayLocal, type Meal } from '@open-nutrition/shared';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { addDays, formatNutrient, MEALS, parseDay, todayLocal, type Meal } from '@open-nutrition/shared';
 
 // ---------------------------------------------------------------------------
 // Icons (simple 24×24 stroke glyphs)
@@ -32,6 +33,7 @@ const ICONS = {
   minus: 'M5 12h14',
   check: 'M5 12l5 5 9-10',
   history: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2',
+  alert: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8v5M12 16.5v.01',
 } as const;
 
 export type IconName = keyof typeof ICONS;
@@ -60,28 +62,75 @@ export function Icon({ name, size = 22, filled = false }: { name: IconName; size
 // ---------------------------------------------------------------------------
 
 const modalStack: object[] = [];
+const FOCUSABLE =
+  'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex="-1"])';
 
+/**
+ * Dialog rendered in a portal: full-screen sheet on phones, centred card from 600 px
+ * (`variant="alert"` is a small centred card at every width). Traps focus, closes on Esc
+ * or a backdrop click, and gives focus back to whatever opened it.
+ */
 export function Modal({
   title,
   onClose,
   children,
   wide = false,
   footer,
+  variant = 'sheet',
+  describedBy,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
   footer?: ReactNode;
+  variant?: 'sheet' | 'compact' | 'alert';
+  describedBy?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const titleId = useId();
   useEffect(() => {
     const token = {};
     modalStack.push(token);
+    const opener = document.activeElement as HTMLElement | null;
+    const dialog = ref.current!;
+    // React's autoFocus has already run; otherwise focus the marked element, the first field, or the dialog itself.
+    if (!dialog.contains(document.activeElement)) {
+      const target =
+        dialog.querySelector<HTMLElement>('[data-autofocus]') ??
+        (window.matchMedia('(pointer: fine)').matches
+          ? dialog.querySelector<HTMLElement>('.modal-body input:not([type="hidden"]):not([type="range"]), .modal-body textarea')
+          : null) ??
+        dialog;
+      target.focus({ preventScroll: true });
+    }
     const on = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && modalStack[modalStack.length - 1] === token) closeRef.current();
+      if (modalStack[modalStack.length - 1] !== token) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeRef.current();
+      } else if (e.key === 'Tab') {
+        const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+        if (!items.length) {
+          e.preventDefault();
+          return;
+        }
+        const first = items[0]!;
+        const last = items[items.length - 1]!;
+        const active = document.activeElement;
+        if (!dialog.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        } else if (e.shiftKey && (active === first || active === dialog)) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     window.addEventListener('keydown', on);
     document.body.classList.add('modal-open');
@@ -89,13 +138,22 @@ export function Modal({
       window.removeEventListener('keydown', on);
       modalStack.splice(modalStack.indexOf(token), 1);
       if (!modalStack.length) document.body.classList.remove('modal-open');
+      if (opener?.isConnected) opener.focus({ preventScroll: true });
     };
   }, []);
-  return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+  return createPortal(
+    <div className={`modal-backdrop ${variant}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div
+        ref={ref}
+        className={`modal ${wide ? 'wide' : ''} ${variant}`}
+        role={variant === 'alert' ? 'alertdialog' : 'dialog'}
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={describedBy}
+        tabIndex={-1}
+      >
         <div className="modal-head">
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close">
             <Icon name="close" />
           </button>
@@ -103,7 +161,8 @@ export function Modal({
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -196,7 +255,7 @@ export function DayNav({ day, onChange, onOpenCalendar }: { day: string; onChang
       <button className="icon-btn" onClick={() => onChange(addDays(day, -1))} aria-label="Previous day">
         <Icon name="left" />
       </button>
-      <button className="day-label" onClick={onOpenCalendar} aria-label="Pick a date">
+      <button className="day-label" onClick={onOpenCalendar} aria-label={`${formatDay(day, true)}. Pick a date`} aria-haspopup="dialog">
         <span>{dayLabel(day)}</span>
         <small>{parseDay(day).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</small>
       </button>
@@ -210,60 +269,172 @@ export function DayNav({ day, onChange, onOpenCalendar }: { day: string; onChang
 const pad = (n: number) => String(n).padStart(2, '0');
 const isoOf = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
 
-/** Month calendar; `marked` days get a dot. */
-export function Calendar({ value, onPick, marked }: { value: string; onPick: (d: string) => void; marked?: Set<string> }) {
+/** "Thu, Nov 19, 2026" (or "Today" / "Yesterday" / "Tomorrow" with `relative`). */
+export function formatDay(day: string, relative = false): string {
+  if (relative) {
+    const l = dayLabel(day);
+    if (l === 'Today' || l === 'Yesterday' || l === 'Tomorrow') return l;
+  }
+  return parseDay(day).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/** Month calendar; `marked` days get a dot. Arrow keys move between days, PageUp/PageDown between months. */
+export function Calendar({
+  value,
+  onPick,
+  marked,
+  min,
+  max,
+}: {
+  value: string;
+  onPick: (d: string) => void;
+  marked?: Set<string>;
+  min?: string;
+  max?: string;
+}) {
   const v = parseDay(value);
   const [ym, setYm] = useState({ y: v.getFullYear(), m: v.getMonth() });
+  const [focusIso, setFocusIso] = useState<string | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const d = parseDay(value);
     setYm({ y: d.getFullYear(), m: d.getMonth() });
   }, [value]);
+  useEffect(() => {
+    if (focusIso) gridRef.current?.querySelector<HTMLElement>(`[data-iso="${focusIso}"]`)?.focus();
+  }, [focusIso, ym]);
   const first = new Date(ym.y, ym.m, 1);
+  const monthName = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   const offset = (first.getDay() + 6) % 7; // Monday first
   const days = new Date(ym.y, ym.m + 1, 0).getDate();
   const today = todayLocal();
   const cells: (number | null)[] = [...Array(offset).fill(null), ...Array.from({ length: days }, (_, i) => i + 1)];
   const shift = (n: number) => setYm(({ y, m }) => ({ y: m + n < 0 ? y - 1 : m + n > 11 ? y + 1 : y, m: (m + n + 12) % 12 }));
+  const out = (iso: string) => (min != null && iso < min) || (max != null && iso > max);
+  const prevDisabled = min != null && isoOf(ym.y, ym.m, 1) <= min;
+  const nextDisabled = max != null && isoOf(ym.y, ym.m, days) >= max;
+  // One tab stop in the grid (roving tabindex): the selected day, else today, else the 1st.
+  const inMonth = (iso: string) => iso.startsWith(isoOf(ym.y, ym.m, 1).slice(0, 8));
+  const tabStop = inMonth(value) ? value : inMonth(today) && !out(today) ? today : isoOf(ym.y, ym.m, 1);
+
+  function onKey(e: React.KeyboardEvent, iso: string) {
+    const step = ({ ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 } as Record<string, number>)[e.key];
+    let next: string | null = null;
+    const d = parseDay(iso);
+    if (step) next = addDays(iso, step);
+    else if (e.key === 'PageUp' || e.key === 'PageDown') {
+      const t = new Date(d.getFullYear(), d.getMonth() + (e.key === 'PageUp' ? -1 : 1), 1);
+      next = isoOf(t.getFullYear(), t.getMonth(), Math.min(d.getDate(), new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate()));
+    } else if (e.key === 'Home') next = addDays(iso, -((d.getDay() + 6) % 7));
+    else if (e.key === 'End') next = addDays(iso, 6 - ((d.getDay() + 6) % 7));
+    if (!next) return;
+    e.preventDefault();
+    if (out(next)) return;
+    const nd = parseDay(next);
+    setYm({ y: nd.getFullYear(), m: nd.getMonth() });
+    setFocusIso(next);
+  }
+
   return (
     <div className="calendar">
       <div className="cal-head">
-        <button className="icon-btn" onClick={() => shift(-1)} aria-label="Previous month">
+        <button className="icon-btn" onClick={() => shift(-1)} aria-label="Previous month" disabled={prevDisabled}>
           <Icon name="left" />
         </button>
-        <strong>{first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</strong>
-        <button className="icon-btn" onClick={() => shift(1)} aria-label="Next month">
+        <strong aria-live="polite">{monthName}</strong>
+        <button className="icon-btn" onClick={() => shift(1)} aria-label="Next month" disabled={nextDisabled}>
           <Icon name="right" />
         </button>
       </div>
-      <div className="cal-grid">
+      <div className="cal-grid" ref={gridRef} role="group" aria-label={monthName}>
         {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, i) => (
-          <span key={i} className="cal-dow">
+          <span key={i} className="cal-dow" aria-hidden="true">
             {d}
           </span>
         ))}
         {cells.map((d, i) => {
           if (d == null) return <span key={i} />;
           const iso = isoOf(ym.y, ym.m, d);
+          const has = marked?.has(iso);
           return (
             <button
               key={i}
+              type="button"
+              data-iso={iso}
               className={`cal-day ${iso === value ? 'on' : ''} ${iso === today ? 'today' : ''}`}
               onClick={() => onPick(iso)}
-              aria-label={iso}
+              onKeyDown={(e) => onKey(e, iso)}
+              tabIndex={iso === tabStop ? 0 : -1}
+              data-autofocus={iso === tabStop ? true : undefined}
+              disabled={out(iso)}
+              aria-label={`${parseDay(iso).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}${has ? ', has entries' : ''}`}
               aria-pressed={iso === value}
+              aria-current={iso === today ? 'date' : undefined}
             >
               {d}
-              {marked?.has(iso) && <i className="cal-dot" />}
+              {has && <i className="cal-dot" />}
             </button>
           );
         })}
       </div>
-      {value !== today && (
-        <button className="link small" onClick={() => onPick(today)}>
+      {value !== today && !out(today) && (
+        <button type="button" className="link small" onClick={() => onPick(today)}>
           Jump to today
         </button>
       )}
     </div>
+  );
+}
+
+/** A date field that opens the app's calendar instead of the browser's native picker. */
+export function DateField({
+  value,
+  onChange,
+  min,
+  max,
+  marked,
+  id,
+  title = 'Pick a day',
+  ariaLabel,
+}: {
+  value: string;
+  onChange: (d: string) => void;
+  min?: string;
+  max?: string;
+  marked?: Set<string>;
+  id?: string;
+  title?: string;
+  ariaLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        id={id}
+        className="date-field"
+        onClick={() => setOpen(true)}
+        aria-haspopup="dialog"
+        aria-label={ariaLabel ? `${ariaLabel}: ${formatDay(value)}` : undefined}
+      >
+        <Icon name="calendar" size={18} />
+        <span className="ellipsis">{formatDay(value, true)}</span>
+      </button>
+      {open && (
+        <Modal title={title} onClose={() => setOpen(false)} variant="compact">
+          <Calendar
+            value={value}
+            min={min}
+            max={max}
+            marked={marked}
+            onPick={(d) => {
+              onChange(d);
+              setOpen(false);
+            }}
+          />
+        </Modal>
+      )}
+    </>
   );
 }
 
@@ -272,6 +443,17 @@ export function Calendar({ value, onPick, marked }: { value: string; onPick: (d:
 // ---------------------------------------------------------------------------
 
 export const round = (v: number, digits = 0) => +v.toFixed(digits);
+/** Locale number with thousands separators; `fixed` keeps trailing zeros (82.0 kg next to 82.4 kg). */
+export const fmt = (v: number, digits = 0, fixed = false) =>
+  v.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: fixed ? digits : 0 });
+/** Signed number with a real minus sign: "+0.4", "−1.2". */
+export const signed = (v: number, digits = 1) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${fmt(Math.abs(v), digits, true)}`;
+/** formatNutrient with thousands separators ("2,300 mg"). */
+export const nutrientText = (key: string, v: number) => formatNutrient(key, v).replace(/^-?\d+(\.\d+)?/, (m) => {
+    // Precision that matches the size: "4,211 mg", "37.4 g", "0.37 µg".
+    const n = Number(m);
+    return fmt(n, Math.abs(n) >= 100 ? 0 : Math.abs(n) >= 10 ? 1 : 2);
+  });
 export const kcal = (v: number | undefined) => Math.round(v ?? 0).toLocaleString();
 export const grams = (v: number | undefined) => {
   const x = v ?? 0;
@@ -295,6 +477,7 @@ export function NumberInput({
   placeholder,
   ariaLabel,
   className,
+  autoFocus,
 }: {
   value: number | null;
   onChange: (v: number | null) => void;
@@ -303,6 +486,7 @@ export function NumberInput({
   placeholder?: string;
   ariaLabel?: string;
   className?: string;
+  autoFocus?: boolean;
 }) {
   const [text, setText] = useState(value == null ? '' : String(value));
   useEffect(() => {
@@ -314,6 +498,8 @@ export function NumberInput({
       id={id}
       className={className}
       inputMode="decimal"
+      autoFocus={autoFocus}
+      autoComplete="off"
       value={text}
       placeholder={placeholder}
       aria-label={ariaLabel}
@@ -326,10 +512,10 @@ export function NumberInput({
   );
 }
 
-export function Bar({ value, max, status, label }: { value: number; max: number; status?: string; label?: string }) {
+export function Bar({ value, max, status, label, className = '' }: { value: number; max: number; status?: string; label?: string; className?: string }) {
   const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
   return (
-    <div className={`bar-track ${status ?? ''}`} role="progressbar" aria-valuenow={Math.round(value)} aria-valuemax={Math.round(max)} aria-label={label}>
+    <div className={`bar-track ${status ?? ''} ${className}`} role="progressbar" aria-valuenow={Math.round(value)} aria-valuemax={Math.round(max)} aria-label={label}>
       <div className="bar-fill" style={{ width: `${pct}%` }} />
     </div>
   );

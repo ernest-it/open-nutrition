@@ -11,6 +11,7 @@ import { Button, Card, Columns, IconButton, MEAL_LABELS, ProgressBar, Screen, T,
 export function TodayScreen() {
   const store = useStore();
   const nav = useNav();
+  const toast = useToast();
   const day = useToday();
   const { wide, width } = useLayout();
   const entries = store.entriesOn(day);
@@ -35,9 +36,7 @@ export function TodayScreen() {
           <MacroBars totals={totals} targets={targets?.nutrients} compact />
         </View>
       </View>
-      {!targets && (
-        <Button title="Set your targets" variant="ghost" onPress={() => nav.switchTab('settings')} />
-      )}
+      {!targets && <Button title="Set your targets" variant="ghost" icon="edit" onPress={() => nav.push({ name: 'targets' })} />}
     </Card>
   );
 
@@ -69,11 +68,13 @@ export function TodayScreen() {
     </View>
   );
 
-  const toast = useToast();
   function copyYesterday(meal: Meal) {
     const copied = store.copyMealFromYesterday(day, meal);
     haptic.success();
-    toast(`Copied ${copied.length} item${copied.length === 1 ? '' : 's'} from yesterday's ${MEAL_LABELS[meal].toLowerCase()}`);
+    toast({
+      message: `Copied ${copied.length} item${copied.length === 1 ? '' : 's'} from yesterday’s ${MEAL_LABELS[meal].toLowerCase()}`,
+      action: { label: 'Undo', onPress: () => copied.forEach((e) => store.remove('diaryEntries', e.id)) },
+    });
   }
 
   return (

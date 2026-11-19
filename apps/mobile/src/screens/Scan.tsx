@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, ScrollView, StyleSheet, View } from 'react-native';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
 import { OFF_ATTRIBUTION } from '@open-nutrition/shared';
@@ -6,7 +6,7 @@ import { lookupBarcode, offContributeUrl } from '../foods';
 import { useLayout } from '../layout';
 import { useAddNav } from '../nav';
 import { useAccount, useStore } from '../state';
-import { Button, Card, Input, MEAL_LABELS, Notice, SheetHeader, T, formatDay, haptic, styles } from '../ui';
+import { Banner, Button, Card, Input, MEAL_LABELS, Notice, SheetHeader, T, formatDay, haptic, styles, useTheme } from '../ui';
 
 type Status = { kind: 'idle' } | { kind: 'busy'; code: string } | { kind: 'not_found'; code: string } | { kind: 'error'; message: string };
 
@@ -20,10 +20,22 @@ export function ScanScreen({ onBack }: { onBack?: () => void }) {
   const [manual, setManual] = useState('');
   const lastCode = useRef<{ code: string; at: number } | null>(null);
   const busy = status.kind === 'busy';
+  const t = useTheme();
 
+  // Ask for the camera once when the scanner opens (the OS prompt stays native); no extra tap needed.
+  const asked = useRef(false);
+  useEffect(() => {
+    if (permission && !permission.granted && permission.status === 'undetermined' && permission.canAskAgain && !asked.current) {
+      asked.current = true;
+      void requestPermission();
+    }
+  }, [permission, requestPermission]);
+
+  const busyRef = useRef(false);
   async function lookup(raw: string) {
     const code = raw.replace(/\D/g, '');
-    if (!code) return;
+    if (!code || busyRef.current) return;
+    busyRef.current = true;
     setStatus({ kind: 'busy', code });
     try {
       const r = await lookupBarcode(store, account, code);
@@ -39,6 +51,8 @@ export function ScanScreen({ onBack }: { onBack?: () => void }) {
       }
     } catch (e) {
       setStatus({ kind: 'error', message: `${(e as Error).message} You can still create the food yourself.` });
+    } finally {
+      busyRef.current = false;
     }
   }
 
@@ -52,7 +66,7 @@ export function ScanScreen({ onBack }: { onBack?: () => void }) {
   }
 
   const camera = (
-    <View style={[s.cameraBox, { backgroundColor: '#000' }, landscape ? { flex: 1 } : { aspectRatio: wide ? 16 / 9 : 4 / 3 }]}>
+    <View style={[s.cameraBox, { backgroundColor: permission?.granted ? t.media : t.surface2, borderColor: t.border, borderWidth: permission?.granted ? 0 : StyleSheet.hairlineWidth }, landscape ? { flex: 1 } : { aspectRatio: wide ? 16 / 9 : 4 / 3 }]}>
       {permission?.granted ? (
         <>
           <CameraView
@@ -62,18 +76,18 @@ export function ScanScreen({ onBack }: { onBack?: () => void }) {
             onBarcodeScanned={busy || status.kind === 'not_found' ? undefined : onScanned}
           />
           <View pointerEvents="none" style={s.frameWrap}>
-            <View style={[s.frame, { borderColor: 'rgba(255,255,255,0.9)' }]} />
+            <View style={[s.frame, { borderColor: t.onMedia }]} />
           </View>
           {busy && (
-            <View style={s.busy}>
-              <ActivityIndicator color="#fff" size="large" />
-              <T color="#fff">Looking up {status.code}…</T>
+            <View style={[s.busy, { backgroundColor: t.mediaScrim }]}>
+              <ActivityIndicator color={t.onMedia} size="large" />
+              <T color={t.onMedia}>Looking up {status.code}…</T>
             </View>
           )}
         </>
       ) : (
         <View style={s.permission}>
-          <T color="#fff" style={{ textAlign: 'center' }}>
+          <T muted style={{ textAlign: 'center' }}>
             {permission == null ? 'Checking camera access…' : 'Allow camera access to scan barcodes. You can also type the number below.'}
           </T>
           {permission && !permission.granted && (
@@ -105,10 +119,7 @@ export function ScanScreen({ onBack }: { onBack?: () => void }) {
         </Card>
       )}
       {status.kind === 'error' && (
-        <Card>
-          <T>{status.message}</T>
-          <Button title="Try again" onPress={() => setStatus({ kind: 'idle' })} />
-        </Card>
+        <Banner tone="error" message={status.message} action={{ label: 'Try again', onPress: () => setStatus({ kind: 'idle' }) }} />
       )}
       <T small muted style={{ marginTop: 8 }}>
         Or type the barcode number
@@ -117,7 +128,7 @@ export function ScanScreen({ onBack }: { onBack?: () => void }) {
         <View style={{ flex: 1 }}>
           <Input value={manual} onChangeText={setManual} keyboardType="number-pad" placeholder="e.g. 5000159484695" accessibilityLabel="Barcode number" onSubmitEditing={() => void lookup(manual)} />
         </View>
-        <Button title="Look up" onPress={() => void lookup(manual)} disabled={busy || manual.replace(/\D/g, '').length < 8} />
+        <Button title="Look up" onPress={() => void lookup(manual)} loading={busy} disabled={manual.replace(/\D/g, '').length < 8} />
       </View>
       <T small muted style={{ marginTop: 10 }}>
         {OFF_ATTRIBUTION}
@@ -149,6 +160,6 @@ const s = StyleSheet.create({
   cameraBox: { width: '100%', borderRadius: 16, overflow: 'hidden' },
   frameWrap: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
   frame: { width: '72%', aspectRatio: 2.2, borderWidth: 2, borderRadius: 12 },
-  busy: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  busy: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', gap: 8 },
   permission: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 16, gap: 10, minHeight: 200 },
 });

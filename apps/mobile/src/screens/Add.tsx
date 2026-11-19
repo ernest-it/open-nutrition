@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import {
   N,
@@ -37,6 +37,7 @@ import {
   kcal,
   mealForNow,
   styles,
+  useOnce,
   useTheme,
   useToast,
 } from '../ui';
@@ -52,6 +53,8 @@ export function AddSheet({ options, onClose }: { options: AddOptions; onClose: (
   const first: AddRoute = { name: options.start && options.start !== 'search' ? options.start : 'hub' } as AddRoute;
   const [stack, setStack] = useState<AddRoute[]>([first]);
   const route = stack[stack.length - 1]!;
+  const guard = useRef<(() => void) | null>(null);
+  const closed = useRef(false);
   const nav: AddNav = useMemo(
     () => ({
       day: options.day,
@@ -60,19 +63,25 @@ export function AddSheet({ options, onClose }: { options: AddOptions; onClose: (
       push: (r) => setStack((s) => [...s, r]),
       pop: () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s)),
       replace: (r) => setStack((s) => [...s.slice(0, -1), r]),
-      close: (message) => {
+      close: (message, undo) => {
+        // A fast double tap on "Add" must not log twice.
+        if (closed.current) return;
+        closed.current = !!message;
         if (message) {
           haptic.success();
-          toast(message);
+          toast({ message, action: undo ? { label: 'Undo', onPress: undo } : undefined });
         }
         onClose();
+      },
+      setBackGuard: (fn) => {
+        guard.current = fn;
       },
     }),
     [meal, options.day, onClose, toast],
   );
   const back = stack.length > 1 ? nav.pop : undefined;
   return (
-    <Sheet onClose={back ?? onClose}>
+    <Sheet onClose={() => (guard.current ? guard.current() : (back ?? onClose)())}>
       <AddNavContext.Provider value={nav}>
         <KeyboardAware>
           {route.name === 'hub' && <Hub />}
@@ -115,7 +124,7 @@ function Hub() {
   const recents = store.recentFoods(25).filter((f) => !favIds.has(f.id));
   const tiles: { icon: IconName; label: string; route: AddRoute; hint?: string }[] = [
     { icon: 'barcode', label: 'Scan', route: { name: 'scan' } },
-    { icon: 'sparkle', label: 'Photo / describe', route: { name: 'ai' }, hint: prefs.aiEnabled ? undefined : 'off' },
+    { icon: 'sparkle', label: 'Photo / describe', route: { name: 'ai' }, hint: prefs.aiEnabled ? undefined : 'Off' },
     { icon: 'bolt', label: 'Quick add', route: { name: 'quick' } },
     { icon: 'bookmark', label: 'Meals & recipes', route: { name: 'saved' } },
   ];
@@ -198,16 +207,19 @@ export function FoodDetail({ food: initial, onBack }: { food: Food | FoodData; o
   const targets = store.targetsOn(nav.day)?.nutrients;
   const favorite = !!copy?.favorite;
 
+  const once = useOnce();
   function add() {
-    store.logFood({
-      day: nav.day,
-      meal: nav.meal,
-      food: food as Food,
-      grams: amount.grams,
-      servingLabel: amountLabel(food, amount),
-      quantity: amount.serving < 0 ? 1 : amount.quantity,
+    once.run(() => {
+      const e = store.logFood({
+        day: nav.day,
+        meal: nav.meal,
+        food: food as Food,
+        grams: amount.grams,
+        servingLabel: amountLabel(food, amount),
+        quantity: amount.serving < 0 ? 1 : amount.quantity,
+      });
+      nav.close(`Added ${food.name.split(',')[0]} to ${MEAL_LABELS[nav.meal].toLowerCase()}`, () => store.remove('diaryEntries', e.id));
     });
-    nav.close(`Added ${food.name.split(',')[0]} to ${MEAL_LABELS[nav.meal].toLowerCase()}`);
   }
 
   return (
@@ -282,6 +294,7 @@ function QuickAdd({ onBack }: { onBack?: () => void }) {
   const [name, setName] = useState('');
   const [nutrients, setNutrients] = useState<NutrientMap>({});
   const kcalValue = nutrients[N.energy];
+  const once = useOnce();
   return (
     <View style={{ flex: 1 }}>
       <AddTitle title="Quick add" onBack={onBack} />
@@ -299,12 +312,14 @@ function QuickAdd({ onBack }: { onBack?: () => void }) {
             title={`Add to ${MEAL_LABELS[nav.meal]}`}
             variant="primary"
             disabled={kcalValue == null && nutrients[N.protein] == null && nutrients[N.carbs] == null && nutrients[N.fat] == null}
-            onPress={() => {
-              const n = { ...nutrients };
-              if (n[N.energy] == null) n[N.energy] = 4 * (n[N.protein] ?? 0) + 4 * (n[N.carbs] ?? 0) + 9 * (n[N.fat] ?? 0);
-              store.quickAdd({ day: nav.day, meal: nav.meal, name, nutrients: n });
-              nav.close(`Added ${Math.round(n[N.energy] ?? 0)} kcal to ${MEAL_LABELS[nav.meal].toLowerCase()}`);
-            }}
+            onPress={() =>
+              once.run(() => {
+                const n = { ...nutrients };
+                if (n[N.energy] == null) n[N.energy] = 4 * (n[N.protein] ?? 0) + 4 * (n[N.carbs] ?? 0) + 9 * (n[N.fat] ?? 0);
+                const e = store.quickAdd({ day: nav.day, meal: nav.meal, name: name.trim(), nutrients: n });
+                nav.close(`Added ${kcal(n[N.energy])} kcal to ${MEAL_LABELS[nav.meal].toLowerCase()}`, () => store.remove('diaryEntries', e.id));
+              })
+            }
           />
         </Card>
       </ScrollView>
@@ -387,10 +402,17 @@ function FoodLikeRow({ title, subtitle, onPress }: { title: string; subtitle: st
 }
 
 function SavedMealLog({ id, onBack }: { id: string; onBack?: () => void }) {
+  const once = useRef(false);
   const nav = useAddNav();
   const store = useStore();
   const m = store.get('savedMeals', id);
-  if (!m) return <Empty title="This saved meal was deleted." />;
+  if (!m)
+    return (
+      <View style={{ flex: 1 }}>
+        <AddTitle title="Saved meal" onBack={onBack} />
+        <Empty icon="bookmark" title="This saved meal was deleted." />
+      </View>
+    );
   const total = sumNutrients(m.items.map((i) => i.nutrients));
   return (
     <View style={{ flex: 1 }}>
@@ -416,8 +438,10 @@ function SavedMealLog({ id, onBack }: { id: string; onBack?: () => void }) {
             title={`Add all to ${MEAL_LABELS[nav.meal]}`}
             variant="primary"
             onPress={() => {
-              store.logSavedMeal(m.id, nav.day, nav.meal);
-              nav.close(`Added “${m.name}”`);
+              if (once.current) return;
+              once.current = true;
+              const logged = store.logSavedMeal(m.id, nav.day, nav.meal);
+              nav.close(`Added “${m.name}” to ${MEAL_LABELS[nav.meal].toLowerCase()}`, () => logged.forEach((e) => store.remove('diaryEntries', e.id)));
             }}
           />
         </Card>
@@ -427,13 +451,20 @@ function SavedMealLog({ id, onBack }: { id: string; onBack?: () => void }) {
 }
 
 function RecipeLog({ id, onBack }: { id: string; onBack?: () => void }) {
+  const once = useRef(false);
   const nav = useAddNav();
   const store = useStore();
   const r = store.get('recipes', id);
   const [mode, setMode] = useState<'portions' | 'grams'>('portions');
   const [portions, setPortions] = useState(1);
   const [grams, setGrams] = useState(() => (r ? Math.round(recipePortionGrams(r)) : 100));
-  if (!r) return <Empty title="This recipe was deleted." />;
+  if (!r)
+    return (
+      <View style={{ flex: 1 }}>
+        <AddTitle title="Recipe" onBack={onBack} />
+        <Empty icon="food" title="This recipe was deleted." />
+      </View>
+    );
   const g = mode === 'portions' ? portions * recipePortionGrams(r) : grams;
   const totals = scaleNutrients(recipePer100g(r), g);
   return (
@@ -468,8 +499,10 @@ function RecipeLog({ id, onBack }: { id: string; onBack?: () => void }) {
             variant="primary"
             disabled={!(g > 0)}
             onPress={() => {
-              store.logRecipe(mode === 'portions' ? { day: nav.day, meal: nav.meal, recipeId: r.id, portions } : { day: nav.day, meal: nav.meal, recipeId: r.id, grams });
-              nav.close(`Added ${r.name}`);
+              if (once.current) return;
+              once.current = true;
+              const e = store.logRecipe(mode === 'portions' ? { day: nav.day, meal: nav.meal, recipeId: r.id, portions } : { day: nav.day, meal: nav.meal, recipeId: r.id, grams });
+              nav.close(`Added ${r.name} to ${MEAL_LABELS[nav.meal].toLowerCase()}`, () => store.remove('diaryEntries', e.id));
             }}
           />
         </Card>

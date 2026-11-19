@@ -1,20 +1,22 @@
 import { useEffect, useState } from 'react';
 import { isValidBarcode, kcalFromMacros, N, OFF_ATTRIBUTION, sumNutrients, type Food, type FoodData, type Meal, type NutrientMap } from '@open-nutrition/shared';
 import type { AddRequest, AddTab } from '../addFood';
-import { errorMessage, usePrefs, useStore, store } from '../state';
+import { errorMessage, removeRows, restoreRows, useLoggedDays, usePrefs, useStore, store } from '../state';
 import { getAiStatus, lookupBarcode, searchFoods, searchLocalFoods, type AiStatus, type BarcodeSource } from '../foodApi';
-import { FoodPortion, FoodRow, MacroInputs, NutrientSummary } from '../components';
+import { FoodPortion, FoodRow, MacroInputs, NutrientSummary, plural } from '../components';
+import { InlineError, Spinner, useConfirm, useToast } from '../feedback';
 import { FoodEditor } from './Foods';
 import { AiLog } from './AiLog';
-import { dayLabel, Empty, Icon, kcal, MEAL_LABEL, MealSelect, Modal, type IconName } from '../ui';
+import { DateField, Empty, formatDay, Icon, kcal, MEAL_LABEL, MealSelect, Modal, type IconName } from '../ui';
 
 export function AddFoodSheet({ request, onClose }: { request: AddRequest; onClose: () => void }) {
   const prefs = usePrefs();
   const [tab, setTab] = useState<AddTab>(request.tab ?? 'search');
   const [day, setDay] = useState(request.day);
   const [meal, setMeal] = useState<Meal>(request.meal);
-  const [flash, setFlash] = useState<string | null>(null);
+  const [flash, setFlash] = useState<{ text: string; ids: string[] } | null>(null);
   const [ai, setAi] = useState<AiStatus | null>(null);
+  const marked = useLoggedDays();
 
   useEffect(() => {
     void getAiStatus().then(setAi);
@@ -28,7 +30,10 @@ export function AddFoodSheet({ request, onClose }: { request: AddRequest; onClos
     ['quick', 'Quick add', 'bolt'],
     ['saved', 'Saved meals', 'bowl'],
   ];
-  const logged = (what: string, m: Meal = meal) => setFlash(`Added ${what} to ${MEAL_LABEL[m].toLowerCase()}, ${dayLabel(day).toLowerCase()}.`);
+  const logged = (what: string, ids: string[], m: Meal = meal) => {
+    const when = formatDay(day, true);
+    setFlash({ text: `Added ${what} to ${MEAL_LABEL[m].toLowerCase()}, ${/^[A-Z][a-z]+$/.test(when) ? when.toLowerCase() : when}.`, ids });
+  };
 
   return (
     <Modal title="Add food" onClose={onClose} wide>
@@ -39,12 +44,22 @@ export function AddFoodSheet({ request, onClose }: { request: AddRequest; onClos
         </label>
         <label>
           Day
-          <input type="date" value={day} onChange={(e) => e.target.value && setDay(e.target.value)} />
+          <DateField value={day} onChange={setDay} marked={marked} />
         </label>
       </div>
-      <div className="add-tabs" role="tablist">
+      <div className="add-tabs" role="tablist" aria-label="How to add food">
         {tabs.map(([k, l, icon]) => (
-          <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>
+          <button
+            key={k}
+            role="tab"
+            aria-selected={tab === k}
+            className={tab === k ? 'on' : ''}
+            onClick={(e) => {
+              setTab(k);
+              setFlash(null);
+              e.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+            }}
+          >
             <Icon name={icon} size={18} />
             <span>{l}</span>
           </button>
@@ -52,19 +67,32 @@ export function AddFoodSheet({ request, onClose }: { request: AddRequest; onClos
       </div>
       {flash && (
         <div className="flash" role="status">
-          <Icon name="check" size={18} /> <span>{flash}</span>
+          <Icon name="check" size={18} /> <span>{flash.text}</span>
+          {flash.ids.length > 0 && (
+            <button
+              className="small ghost"
+              onClick={() => {
+                removeRows('diaryEntries', flash.ids);
+                setFlash(null);
+              }}
+            >
+              Undo
+            </button>
+          )}
           <button className="small" onClick={onClose}>
             Done
           </button>
         </div>
       )}
-      {tab === 'search' && <SearchTab day={day} meal={meal} onLogged={logged} />}
-      {tab === 'barcode' && <BarcodeTab day={day} meal={meal} onLogged={logged} />}
-      {tab === 'photo' && showPhoto && ai && (
-        <AiLog day={day} meal={meal} setMeal={setMeal} status={ai} prefs={prefs} onLogged={(n) => logged(`${n} item${n === 1 ? '' : 's'}`)} />
-      )}
-      {tab === 'quick' && <QuickTab day={day} meal={meal} onLogged={logged} />}
-      {tab === 'saved' && <SavedTab day={day} meal={meal} onLogged={logged} />}
+      <div role="tabpanel">
+        {tab === 'search' && <SearchTab day={day} meal={meal} onLogged={logged} />}
+        {tab === 'barcode' && <BarcodeTab day={day} meal={meal} onLogged={logged} />}
+        {tab === 'photo' && showPhoto && ai && (
+          <AiLog day={day} meal={meal} setMeal={setMeal} status={ai} prefs={prefs} onLogged={(ids, m) => logged(plural(ids.length, 'item'), ids, m)} />
+        )}
+        {tab === 'quick' && <QuickTab day={day} meal={meal} onLogged={logged} />}
+        {tab === 'saved' && <SavedTab day={day} meal={meal} onLogged={logged} />}
+      </div>
     </Modal>
   );
 }
@@ -72,7 +100,7 @@ export function AddFoodSheet({ request, onClose }: { request: AddRequest; onClos
 interface TabProps {
   day: string;
   meal: Meal;
-  onLogged: (what: string) => void;
+  onLogged: (what: string, ids: string[], meal?: Meal) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +110,8 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
   const [q, setQ] = useState('');
   const [remote, setRemote] = useState<Food[]>([]);
   const [loading, setLoading] = useState(false);
+  /** The query the current `remote`/`error` belong to (avoids flashing "no matches" while typing). */
+  const [settled, setSettled] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Food | FoodData | null>(null);
   const [creating, setCreating] = useState(false);
@@ -91,6 +121,8 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
     if (text.length < 2) {
       setRemote([]);
       setError(null);
+      setLoading(false);
+      setSettled(text);
       return;
     }
     const ctl = new AbortController();
@@ -100,9 +132,13 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
         .then((r) => {
           setRemote(r);
           setError(null);
+          setSettled(text);
         })
         .catch((e) => {
-          if (!ctl.signal.aborted) setError(errorMessage(e));
+          if (ctl.signal.aborted) return;
+          setRemote([]);
+          setError(errorMessage(e));
+          setSettled(text);
         })
         .finally(() => !ctl.signal.aborted && setLoading(false));
     }, 250);
@@ -119,8 +155,8 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
         day={day}
         meal={meal}
         onBack={() => setPicked(null)}
-        onLogged={() => {
-          onLogged(picked.name);
+        onLogged={(entry, m) => {
+          onLogged(picked.name, [entry.id], m);
           setPicked(null);
         }}
       />
@@ -132,12 +168,21 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
   const server = remote.filter((f) => !localUsda.has(f.sourceId ?? f.id.replace('usda:', '')));
   const favs = store.favoriteFoods();
   const recents = store.recentFoods(20).filter((f) => !f.favorite);
+  const searching = text.length >= 2 && (loading || settled !== text);
 
   return (
     <div>
       <div className="search-box">
         <Icon name="search" size={20} />
-        <input autoFocus type="search" placeholder="Search foods, e.g. “greek yogurt”" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search foods" />
+        <input
+          autoFocus
+          type="search"
+          placeholder="Search foods, e.g. “greek yogurt”"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          aria-label="Search foods"
+          enterKeyHint="search"
+        />
       </div>
       {!text && (
         <>
@@ -175,22 +220,23 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
               </ul>
             </>
           )}
-          <h4 className="list-title">
-            Food database {loading && <span className="spinner" aria-label="Loading" />}
-          </h4>
-          {error && <p className="error">{error}</p>}
-          {server.length > 0 ? (
-            <ul className="list">
+          <h4 className="list-title">Food database {searching && <Spinner label="Searching" />}</h4>
+          <InlineError>{error}</InlineError>
+          {text.length < 2 ? (
+            <p className="muted small">Keep typing to search the database.</p>
+          ) : server.length > 0 ? (
+            <ul className={`list ${searching ? 'stale' : ''}`}>
               {server.map((f) => (
                 <FoodRow key={f.id} food={f} onPick={() => setPicked(f)} />
               ))}
             </ul>
           ) : (
-            !loading && !error && text.length >= 2 && <Empty>No matches in the database.</Empty>
+            !searching &&
+            !error && <Empty>No matches for “{text}”. Try fewer or different words, or create it as a custom food.</Empty>
           )}
         </>
       )}
-      <button className="link pad-y" onClick={() => setCreating(true)}>
+      <button type="button" className="link pad-y" onClick={() => setCreating(true)}>
         <Icon name="plus" size={18} /> Create a custom food
       </button>
       {creating && (
@@ -218,6 +264,7 @@ function BarcodeTab({ day, meal, onLogged }: TabProps) {
 
   async function lookup(e?: React.FormEvent) {
     e?.preventDefault();
+    if (busy) return;
     const c = code.replace(/\D/g, '');
     setError(null);
     setResult(null);
@@ -242,8 +289,8 @@ function BarcodeTab({ day, meal, onLogged }: TabProps) {
         day={day}
         meal={meal}
         onBack={() => setResult(null)}
-        onLogged={() => {
-          onLogged(result.food!.name);
+        onLogged={(entry, m) => {
+          onLogged(result.food!.name, [entry.id], m);
           setResult(null);
           setCode('');
         }}
@@ -260,15 +307,26 @@ function BarcodeTab({ day, meal, onLogged }: TabProps) {
           pattern="[0-9 ]*"
           placeholder="Type the digits under the barcode"
           value={code}
-          onChange={(e) => setCode(e.target.value)}
+          onChange={(e) => {
+            setCode(e.target.value);
+            setError(null);
+          }}
           aria-label="Barcode"
+          aria-invalid={!!error}
+          enterKeyHint="search"
         />
         <button className="primary" type="submit" disabled={busy || !code.trim()}>
-          {busy ? 'Looking up…' : 'Look up'}
+          {busy ? (
+            <>
+              <Spinner /> Looking up…
+            </>
+          ) : (
+            'Look up'
+          )}
         </button>
       </form>
+      <InlineError>{error}</InlineError>
       <p className="muted small">Packaged foods are looked up in Open Food Facts, a free, community-made database.</p>
-      {error && <p className="error">{error}</p>}
       {result && !result.food && (
         <div className="card callout">
           <strong>Not found</strong>
@@ -298,27 +356,28 @@ function QuickTab({ day, meal, onLogged }: TabProps) {
   const [name, setName] = useState('');
   const [n, setN] = useState<NutrientMap>({});
   const kcalValue = n[N.energy] ?? (n[N.protein] != null || n[N.carbs] != null || n[N.fat] != null ? Math.round(kcalFromMacros(n)) : null);
+
+  function add(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!kcalValue) return;
+    const entry = store.quickAdd({ day, meal, name, nutrients: { ...n, [N.energy]: kcalValue } });
+    onLogged(name.trim() || `${kcal(kcalValue)} kcal`, [entry.id]);
+    setName('');
+    setN({});
+  }
+
   return (
-    <div>
+    <form onSubmit={add}>
       <p className="muted small">Know the numbers already? Type them in. Leave calories blank to work them out from the macros.</p>
       <label>
         Description (optional)
         <input value={name} maxLength={300} placeholder="e.g. Office birthday cake" onChange={(e) => setName(e.target.value)} />
       </label>
       <MacroInputs value={n} onChange={setN} />
-      <button
-        className="primary block"
-        disabled={!kcalValue}
-        onClick={() => {
-          store.quickAdd({ day, meal, name, nutrients: { ...n, [N.energy]: kcalValue ?? 0 } });
-          onLogged(name.trim() || `${kcalValue} kcal`);
-          setName('');
-          setN({});
-        }}
-      >
-        Add {kcalValue ? `${kcalValue} kcal` : ''}
+      <button type="submit" className="primary block" disabled={!kcalValue}>
+        {kcalValue ? `Add ${kcal(kcalValue)} kcal` : 'Add'}
       </button>
-    </div>
+    </form>
   );
 }
 
@@ -326,10 +385,12 @@ function QuickTab({ day, meal, onLogged }: TabProps) {
 
 function SavedTab({ day, meal, onLogged }: TabProps) {
   const s = useStore();
+  const ask = useConfirm();
+  const toast = useToast();
   const meals = s.all('savedMeals').sort((a, b) => a.name.localeCompare(b.name));
   const [open, setOpen] = useState<string | null>(null);
   if (!meals.length)
-    return <Empty>No saved meals yet. In your diary, open a meal's ⋯ menu and choose “Save as a meal” to reuse it later.</Empty>;
+    return <Empty>No saved meals yet. In your diary, open a meal's ⋯ menu and choose “Save as a meal” to log it again later in one tap.</Empty>;
   return (
     <ul className="list">
       {meals.map((m) => {
@@ -341,15 +402,19 @@ function SavedTab({ day, meal, onLogged }: TabProps) {
                 <span className="entry-main">
                   <span className="entry-name">{m.name}</span>
                   <span className="entry-sub">
-                    {m.items.length} item{m.items.length === 1 ? '' : 's'} · {kcal(total[N.energy])} kcal
+                    {plural(m.items.length, 'item')} · {kcal(total[N.energy])} kcal
                   </span>
+                </span>
+                <span className={`chevron ${open === m.id ? 'open' : ''}`} aria-hidden="true">
+                  <Icon name="right" size={18} />
                 </span>
               </button>
               <button
                 className="primary small-btn"
+                aria-label={`Log ${m.name}`}
                 onClick={() => {
-                  s.logSavedMeal(m.id, day, meal);
-                  onLogged(m.name);
+                  const rows = s.logSavedMeal(m.id, day, meal);
+                  onLogged(m.name, rows.map((r) => r.id));
                 }}
               >
                 Log
@@ -361,12 +426,25 @@ function SavedTab({ day, meal, onLogged }: TabProps) {
                   {m.items.map((it, i) => (
                     <li key={i} className="row between">
                       <span className="grow ellipsis">{it.name}</span>
-                      <span className="muted">{kcal(it.nutrients[N.energy])} kcal</span>
+                      <span className="muted nowrap">{kcal(it.nutrients[N.energy])} kcal</span>
                     </li>
                   ))}
                 </ul>
                 <NutrientSummary n={total} />
-                <button className="danger small" onClick={() => confirm(`Delete “${m.name}”?`) && s.remove('savedMeals', m.id)}>
+                <button
+                  className="danger small"
+                  onClick={async () => {
+                    const ok = await ask({
+                      title: 'Delete saved meal?',
+                      body: <>“{m.name}” will be removed from Saved meals. Diary entries you already logged from it stay.</>,
+                      confirmLabel: 'Delete',
+                      destructive: true,
+                    });
+                    if (!ok) return;
+                    s.remove('savedMeals', m.id);
+                    toast({ message: `Deleted “${m.name}”.`, action: { label: 'Undo', onClick: () => restoreRows('savedMeals', [m.id]) } });
+                  }}
+                >
                   <Icon name="trash" size={16} /> Delete saved meal
                 </button>
               </div>
