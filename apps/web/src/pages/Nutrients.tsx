@@ -3,16 +3,15 @@ import {
   addDays,
   daySchema,
   CORE_NUTRIENTS,
-  N,
-  nutrientStatus,
+  daysForAverage,
   parseDay,
+  statusFor,
   sumNutrients,
   topFoodsFor,
-  type NutrientDef,
   type NutrientStatus,
 } from '@open-nutrition/shared';
 import { useLoggedDays, useStore } from '../state';
-import { Calendar, Empty, Icon, Modal, nutrientText, Segmented } from '../ui';
+import { Calendar, Empty, Icon, Modal, nutrientText, pctOf, Segmented } from '../ui';
 
 type Period = 'day' | 'week' | 'month';
 
@@ -43,14 +42,6 @@ function rangeLabel([a, b]: [string, string], period: Period): string {
   return `${da.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${db.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
 }
 
-function statusOf(def: NutrientDef, value: number, target: number): NutrientStatus {
-  if (def.key === N.energy) {
-    if (!(target > 0)) return 'ok';
-    return value > target * 1.1 ? 'over' : value < target * 0.8 ? 'under' : 'ok';
-  }
-  return nutrientStatus(value, target, def.limit === true);
-}
-
 const STATUS_TEXT: Record<NutrientStatus, string> = { under: 'Low', ok: 'On track', over: 'Over' };
 
 export function NutrientsPage({ day }: { day?: string }) {
@@ -67,8 +58,12 @@ export function NutrientsPage({ day }: { day?: string }) {
   const [open, setOpen] = useState<string | null>(null);
   const range = rangeOf(anchor, period);
   const entries = store.all('diaryEntries').filter((e) => e.date >= range[0] && e.date <= range[1]);
-  const days = new Set(entries.map((e) => e.date)).size;
-  const total = sumNutrients(entries.map((e) => e.nutrients));
+  // Week/month: average over logged days, leaving out today while it's still in progress (shared rule, same as mobile).
+  const loggedDays = [...new Set(entries.map((e) => e.date))].sort();
+  const avgDays = period === 'day' ? loggedDays : daysForAverage(loggedDays, today);
+  const todayLeftOut = period !== 'day' && loggedDays.includes(today) && !avgDays.includes(today);
+  const days = avgDays.length;
+  const total = sumNutrients(entries.filter((e) => avgDays.includes(e.date)).map((e) => e.nutrients));
   const avg = (k: string) => (days ? (total[k] ?? 0) / days : 0);
   const targetDay = range[1] < store.today() ? range[1] : store.today() < range[0] ? range[0] : store.today();
   const targets = store.targetsOn(targetDay)?.nutrients ?? {};
@@ -93,9 +88,10 @@ export function NutrientsPage({ day }: { day?: string }) {
         <button className="icon-btn" onClick={() => setAnchor(shift(anchor, period, -1))} aria-label="Previous period">
           <Icon name="left" />
         </button>
-        <button className="day-label" onClick={() => setCalOpen(true)} aria-label={`${rangeLabel(range, period)}. Pick a date`} aria-haspopup="dialog">
+        <button className="day-label" onClick={() => setCalOpen(true)} aria-label={`${rangeLabel(range, period)}${todayLeftOut ? ", today not included" : ""}. Pick a date`} aria-haspopup="dialog">
           <span>{rangeLabel(range, period)}</span>
           <small>{period === 'day' ? `${entries.length} item${entries.length === 1 ? '' : 's'} logged` : `Daily average over ${days} logged day${days === 1 ? '' : 's'}`}</small>
+          {todayLeftOut && <small className="day-note">Today not included</small>}
         </button>
         <button className="icon-btn" onClick={() => setAnchor(shift(anchor, period, 1))} aria-label="Next period" disabled={range[1] >= today}>
           <Icon name="right" />
@@ -136,19 +132,19 @@ export function NutrientsPage({ day }: { day?: string }) {
           <div className="legend status-legend">
             <span className="st-under">Low</span>
             <span className="st-ok">On track</span>
-            <span className="st-over">Over a limit</span>
+            <span className="st-over">Over</span>
             <span className="muted">Tick = target</span>
           </div>
           <ul className="nutrient-list">
             {CORE_NUTRIENTS.map((def) => {
               const v = avg(def.key);
               const t = targets[def.key] ?? 0;
-              const st = statusOf(def, v, t);
-              const pct = t > 0 ? Math.min(v / t, 1.5) / 1.5 : 0;
+              const st = statusFor(def.key, v, t); // null without a target: empty track, no tick
+              const pct = st ? Math.min(v / t, 1.5) / 1.5 : 0;
               const isOpen = open === def.key;
               const top = isOpen ? topFoodsFor(entries, def.key, 8) : [];
               return (
-                <li key={def.key} className={`nutrient st-${t > 0 ? st : 'none'}`}>
+                <li key={def.key} className={`nutrient st-${st ?? 'none'}`}>
                   <button className="nutrient-row" onClick={() => setOpen(isOpen ? null : def.key)} aria-expanded={isOpen}>
                     <span className="n-name">
                       {def.name}
@@ -156,13 +152,13 @@ export function NutrientsPage({ day }: { day?: string }) {
                     </span>
                     <span className="n-value">
                       {nutrientText(def.key, v)}
-                      {t > 0 && <small className="muted"> / {nutrientText(def.key, t)}</small>}
+                      {st && <small className="muted"> / {nutrientText(def.key, t)}</small>}
                     </span>
                     <span className="n-bar" aria-hidden="true">
-                      <span className="n-fill" style={{ width: `${(t > 0 ? pct : 0) * 100}%` }} />
-                      {t > 0 && <span className="n-tick" />}
+                      <span className="n-fill" style={{ width: `${pct * 100}%` }} />
+                      {st && <span className="n-tick" />}
                     </span>
-                    <span className="n-status">{t > 0 ? `${STATUS_TEXT[st]} · ${Math.round((v / t) * 100)}%` : 'No target'}</span>
+                    <span className="n-status">{st ? `${STATUS_TEXT[st]} · ${pctOf(v, t)}` : 'No target'}</span>
                   </button>
                   {isOpen && (
                     <div className="top-foods">

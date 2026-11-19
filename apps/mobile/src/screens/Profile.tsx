@@ -8,7 +8,7 @@ import {
   SETTING_PROFILE,
   computeTargets,
   driDefaults,
-  formatNutrient,
+
   fromCm,
   fromKg,
   fromMl,
@@ -34,6 +34,7 @@ import {
   Segmented,
   T,
   Toggle,
+  fmtNutrient,
   haptic,
   kcal,
   styles,
@@ -333,7 +334,7 @@ export function TargetsSummary() {
   return (
     <View style={styles.row}>
       <T style={{ flex: 1 }}>
-        {kcal(n[N.energy])} kcal · P {formatNutrient(N.protein, n[N.protein])} · C {formatNutrient(N.carbs, n[N.carbs])} · F {formatNutrient(N.fat, n[N.fat])}
+        {kcal(n[N.energy])} kcal · P {fmtNutrient(N.protein, n[N.protein])} · C {fmtNutrient(N.carbs, n[N.carbs])} · F {fmtNutrient(N.fat, n[N.fat])}
       </T>
     </View>
   );

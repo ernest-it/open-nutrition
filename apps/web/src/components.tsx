@@ -18,9 +18,9 @@ import { DateField, formatDay, grams, Icon, kcal, MEAL_LABEL, MealSelect, Modal,
 export function MacroLine({ n, className = '' }: { n: NutrientMap; className?: string }) {
   return (
     <span className={`macro-line ${className}`}>
-      <span className="m-p">P {grams(n[N.protein])}g</span>
-      <span className="m-c">C {grams(n[N.carbs])}g</span>
-      <span className="m-f">F {grams(n[N.fat])}g</span>
+      <span className="m-p">P {grams(n[N.protein])} g</span>
+      <span className="m-c">C {grams(n[N.carbs])} g</span>
+      <span className="m-f">F {grams(n[N.fat])} g</span>
     </span>
   );
 }

@@ -298,6 +298,28 @@ export function nutrientStatus(value: number, target: number, limit: boolean, to
 /** Whether a nutrient's target is a ceiling, from NUTRIENTS. */
 export const isLimit = (key: NutrientKey) => NUTRIENT_BY_KEY[key]?.limit === true;
 
+/**
+ * Status of any nutrient against its target, used by every UI so web and
+ * mobile agree. Calories are a band: under 80% is 'under', over 110% is
+ * 'over'. Other nutrients use `nutrientStatus` with their limit flag.
+ * Returns null when there is no target (draw an empty track, not a bar).
+ */
+export function statusFor(key: NutrientKey, value: number, target: number | null | undefined): NutrientStatus | null {
+  if (!(target != null && target > 0)) return null;
+  if (key === '208') return value > target * 1.1 ? 'over' : value < target * 0.8 ? 'under' : 'ok';
+  return nutrientStatus(value, target, isLimit(key));
+}
+
+/**
+ * Days to average over for a period report: days with entries, leaving out
+ * today when it is still in progress (unless it's the only logged day), so a
+ * half-logged day doesn't drag every average down.
+ */
+export function daysForAverage(loggedDays: string[], today: string): string[] {
+  const done = loggedDays.filter((d) => d !== today);
+  return done.length > 0 ? done : loggedDays;
+}
+
 export const CORE_NUTRIENTS = NUTRIENTS.filter((n) => n.core);
 
 // ---------------------------------------------------------------------------

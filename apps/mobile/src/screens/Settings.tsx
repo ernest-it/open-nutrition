@@ -10,7 +10,7 @@ import { Icon, type IconName } from '../icons';
 import { useLayout } from '../layout';
 import { useNav } from '../nav';
 import { setPrefs, useAccount, usePrefs, useStore } from '../state';
-import { Banner, Button, Card, Chips, Input, ListRow, Notice, Screen, Segmented, T, Toggle, haptic, styles, useConfirm, useTheme, useToast } from '../ui';
+import { Banner, Button, Card, Chips, Columns, Input, ListRow, Notice, Screen, Segmented, T, Toggle, haptic, styles, useConfirm, useTheme, useToast } from '../ui';
 import { TargetsSummary } from './Profile';
 
 const timeOf = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
@@ -97,7 +97,7 @@ export function SettingsScreen({ onSignOut }: { onSignOut: () => Promise<void> }
       <TargetsSummary />
       <View style={[styles.row, { flexWrap: 'wrap', marginTop: 6 }]}>
         <Button small icon="edit" title="Edit targets" onPress={() => nav.push({ name: 'targets' })} />
-        <Button small title={store.profile() ? 'Edit profile' : 'Set up profile'} onPress={() => nav.push({ name: 'profile' })} />
+        <Button small icon="user" title={store.profile() ? 'Edit profile' : 'Set up profile'} onPress={() => nav.push({ name: 'profile' })} />
       </View>
     </Card>,
     <Card key="units">
@@ -158,10 +158,8 @@ export function SettingsScreen({ onSignOut }: { onSignOut: () => Promise<void> }
   const right = cards.filter((_, i) => i % 2 === 1);
   return (
     <Screen title="Settings" wide>
-      <View style={{ flexDirection: 'row', gap: 16, alignItems: 'flex-start' }}>
-        <View style={{ flex: 1, minWidth: 0 }}>{left}</View>
-        <View style={{ flex: 1, minWidth: 0 }}>{right}</View>
-      </View>
+      <Columns left={left} right={right} />
+
     </Screen>
   );
 }
@@ -205,6 +203,14 @@ function AiSettings() {
     else void getApiKey().then((k) => setMasked(k ? maskApiKey(k) : null));
   }, [account]);
 
+  // In server mode AI runs through the server: when it isn't configured there, the switch can't be on.
+  const unavailable =
+    account.server && status === undefined
+      ? 'Checking whether your server provides AI…'
+      : account.server && status && !status.enabled
+        ? 'Not available: AI is not configured on your server (it needs LLM_API_KEY).'
+        : null;
+  const aiOn = prefs.aiEnabled && unavailable == null;
   const models = account.server && status?.models?.length ? AI_MODELS.filter((m) => status.models.includes(m.id)) : AI_MODELS;
 
   async function saveKey() {
@@ -242,14 +248,15 @@ function AiSettings() {
       <SectionTitle icon="sparkle">AI meal logging</SectionTitle>
       <Toggle
         label="Log meals from photos and descriptions"
-        hint="Off by default. Uses Claude by Anthropic."
-        value={prefs.aiEnabled}
+        hint={unavailable ?? 'Off by default. Uses Claude by Anthropic.'}
+        value={aiOn}
+        disabled={unavailable != null}
         onChange={(v) => setPrefs({ aiEnabled: v })}
       />
       <Notice tone="warn">
         {`Privacy: when you use AI logging, the meal photo and description are sent to Anthropic${account.server ? ' via your server' : ''}. Nothing is sent while this is off.`}
       </Notice>
-      {prefs.aiEnabled && (
+      {aiOn && (
         <View>
           <T small muted bold style={{ marginTop: 8 }}>
             Model

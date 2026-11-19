@@ -34,6 +34,7 @@ import {
   T,
   formatDay,
   haptic,
+  grams1,
   kcal,
   mealForNow,
   styles,
@@ -265,7 +266,7 @@ export function FoodDetail({ food: initial, onBack }: { food: Food | FoodData; o
           <MealPicker value={nav.meal} onChange={nav.setMeal} />
           <Button title={`Add to ${MEAL_LABELS[nav.meal]}`} variant="primary" icon="plus" onPress={add} disabled={!(amount.grams > 0)} />
         </Card>
-        <H2>Nutrients{amount.grams > 0 ? ` in ${+amount.grams.toFixed(1)} g` : ''}</H2>
+        <H2>Nutrients{amount.grams > 0 ? ` in ${grams1(amount.grams)} g` : ''}</H2>
         <Card>
           <NutrientTable nutrients={totals} targets={targets} />
         </Card>

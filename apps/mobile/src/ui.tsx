@@ -10,6 +10,7 @@ import {
   Text,
   TextInput,
   View,
+  type LayoutChangeEvent,
   type StyleProp,
   type TextInputProps,
   type TextProps,
@@ -20,11 +21,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { addDays, parseDay, todayLocal, type Meal } from '@open-nutrition/shared';
 import { Banner, ToastHost } from './feedback';
 import { Icon, type IconName } from './icons';
-import { MAX_CONTENT_WIDTH, useLayout } from './layout';
+import { MAX_CONTENT_WIDTH, MAX_WIDE_WIDTH, useLayout } from './layout';
 import { haptic, useTheme } from './theme';
+import { fmtGrams, formatNumber } from './format';
 
 export { haptic, statusColor, useTheme, type Theme } from './theme';
 export { Banner, Dialog, DialogButton, useConfirm, useToast } from './feedback';
+export { fmtGrams, fmtNutrient, fmtWater, formatAmount, formatNumber } from './format';
 
 /** Set by the app shell while a pushed route shows its title in the top bar (screens then skip their own big title). */
 export const HeaderTitleContext = createContext(false);
@@ -82,7 +85,7 @@ export function Screen({
         style={{ backgroundColor: t.bg }}
         contentContainerStyle={[
           styles.screen,
-          { padding: tiny ? 12 : 16, paddingBottom: padBottom, maxWidth: wide ? 1280 : MAX_CONTENT_WIDTH },
+          { padding: tiny ? 12 : 16, paddingBottom: padBottom, maxWidth: wide ? MAX_WIDE_WIDTH : MAX_CONTENT_WIDTH },
         ]}
         keyboardShouldPersistTaps="handled"
         automaticallyAdjustKeyboardInsets
@@ -111,6 +114,7 @@ export function Title({ children, right }: { children: ReactNode; right?: ReactN
 /** Two columns on wide layouts, stacked on compact ones. */
 export function Columns({ left, right, ratio = 1, gap = 16 }: { left: ReactNode; right: ReactNode; ratio?: number; gap?: number }) {
   const { wide } = useLayout();
+  const [w, onLayout] = usePaneWidths(ratio, gap);
   if (!wide) {
     return (
       <View>
@@ -120,11 +124,44 @@ export function Columns({ left, right, ratio = 1, gap = 16 }: { left: ReactNode;
     );
   }
   return (
-    <View style={{ flexDirection: 'row', gap, alignItems: 'flex-start' }}>
-      <View style={{ flex: ratio, minWidth: 0 }}>{left}</View>
-      <View style={{ flex: 1, minWidth: 0 }}>{right}</View>
+    <View onLayout={onLayout} style={{ flexDirection: 'row', gap, alignItems: 'flex-start', alignSelf: 'stretch' }}>
+      <View style={paneStyle(w?.[0], ratio)}>{left}</View>
+      <View style={paneStyle(w?.[1], 1)}>{right}</View>
     </View>
   );
+}
+
+/**
+ * Measures a two-pane row and splits its width `ratio : 1` (minus the gap) into explicit pane widths.
+ * Until the first layout the panes fall back to flex with `minWidth: 0`; after it, explicit widths keep
+ * long text in one pane from pushing the other past the screen edge.
+ */
+export function usePaneWidths(ratio: number, gap: number): [[number, number] | null, (e: LayoutChangeEvent) => void] {
+  const [width, setWidth] = useState(0);
+  const onLayout = useCallback((e: LayoutChangeEvent) => {
+    const next = Math.floor(e.nativeEvent.layout.width);
+    setWidth((prev) => (Math.abs(prev - next) >= 1 ? next : prev));
+  }, []);
+  if (width <= 0) return [null, onLayout];
+  const usable = Math.max(0, width - gap);
+  const a = Math.floor((usable * ratio) / (ratio + 1));
+  return [[a, usable - a], onLayout];
+}
+
+/** Full-height master/detail panes (each pane scrolls on its own), separated by a hairline. */
+export function SplitView({ left, right, ratio = 1 }: { left: ReactNode; right: ReactNode; ratio?: number }) {
+  const t = useTheme();
+  const [w, onLayout] = usePaneWidths(ratio, 0);
+  return (
+    <View onLayout={onLayout} style={{ flex: 1, flexDirection: 'row', width: '100%', maxWidth: MAX_WIDE_WIDTH, alignSelf: 'center' }}>
+      <View style={paneStyle(w?.[0], ratio)}>{left}</View>
+      <View style={[paneStyle(w?.[1], 1), { borderLeftWidth: StyleSheet.hairlineWidth, borderColor: t.border }]}>{right}</View>
+    </View>
+  );
+}
+
+export function paneStyle(width: number | undefined, flex: number): ViewStyle {
+  return width != null ? { width, minWidth: 0, flexGrow: 0, flexShrink: 0 } : { flex, minWidth: 0 };
 }
 
 /**
@@ -523,12 +560,27 @@ export function Segmented<V extends string>({ options, value, onChange }: { opti
   );
 }
 
-export function Toggle({ label: lbl, value, onChange, hint }: { label: string; value: boolean; onChange: (v: boolean) => void; hint?: string }) {
+export function Toggle({
+  label: lbl,
+  value,
+  onChange,
+  hint,
+  disabled,
+}: {
+  label: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+  hint?: string;
+  /** Greys the switch out and blocks changes; put the reason in `hint`. */
+  disabled?: boolean;
+}) {
   const t = useTheme();
   return (
     <Pressable
       accessibilityRole="switch"
-      accessibilityState={{ checked: value }}
+      accessibilityState={{ checked: value, disabled: !!disabled }}
+      accessibilityHint={disabled ? hint : undefined}
+      disabled={disabled}
       onPress={() => {
         haptic.tap();
         onChange(!value);
@@ -536,20 +588,19 @@ export function Toggle({ label: lbl, value, onChange, hint }: { label: string; v
       style={[styles.rowBetween, { minHeight: 48, paddingVertical: 6 }]}
     >
       <View style={{ flex: 1 }}>
-        <T>{lbl}</T>
+        <T color={disabled ? t.muted : undefined}>{lbl}</T>
         {hint && (
           <T small muted>
             {hint}
           </T>
         )}
       </View>
-      <View style={[styles.switchTrack, { backgroundColor: value ? t.accent : t.track }]}>
+      <View style={[styles.switchTrack, { backgroundColor: value ? t.accent : t.track, opacity: disabled ? 0.45 : 1 }]}>
         <View style={[styles.switchThumb, { backgroundColor: t.thumb, alignSelf: value ? 'flex-end' : 'flex-start' }]} />
       </View>
     </Pressable>
   );
 }
-
 export function ProgressBar({ value, max, color, height = 8 }: { value: number; max: number; color: string; height?: number }) {
   const t = useTheme();
   const pct = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
@@ -676,8 +727,9 @@ export function formatDay(day: string, long = false): string {
 }
 
 export const formatDate = (ms: number) => new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-export const kcal = (v: number | undefined | null) => Math.round(v ?? 0).toLocaleString();
-export const grams1 = (v: number | undefined | null) => `${+(v ?? 0).toFixed(v != null && Math.abs(v) < 10 ? 1 : 0)}`;
+export const kcal = (v: number | undefined | null) => formatNumber(Math.round(v ?? 0), 0);
+/** Grams with the app-wide precision (1 decimal under 10, whole numbers above). */
+export const grams1 = fmtGrams;
 
 export const styles = StyleSheet.create({
   // Content is capped and centred so tablets don't get edge-to-edge lines.

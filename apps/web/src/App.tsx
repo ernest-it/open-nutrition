@@ -78,7 +78,6 @@ function Shell({ auth, onLogout }: { auth: Auth; onLogout: () => void }) {
   const closeAdd = useCallback(() => setAdd(null), []);
   const pending = store.pendingCount();
   const syncLabel = store.lastSyncError ? (navigator.onLine ? 'Not synced' : 'Offline') : pending ? 'Syncing…' : 'Synced';
-  const showFab = section === 'today' || section === 'diary';
   const current = TABS.find(([k]) => k === section);
 
   useEffect(() => {
@@ -94,8 +93,10 @@ function Shell({ auth, onLogout }: { auth: Auth; onLogout: () => void }) {
             <img src="/icon.svg" alt="" width={28} height={28} />
             <span>Open Nutrition</span>
           </a>
-          <button className="primary nav-add" onClick={() => openAdd({ day: section === 'diary' && rest[0] ? rest[0] : store.today(), meal: mealForNow() })}>
-            <Icon name="plus" /> Log food
+          {/* Sidebar button on wide screens; on phones and tablets it docks in the middle of the tab bar, so it never floats over content. */}
+          <button className="primary nav-add" aria-label="Log food" onClick={() => openAdd({ day: section === 'diary' && rest[0] ? rest[0] : store.today(), meal: mealForNow() })}>
+            <Icon name="plus" />
+            <span className="nav-add-label">Log food</span>
           </button>
           {TABS.map(([key, name, icon]) => (
             <a key={key} href={`#/${key}`} className={`nav-item ${section === key ? 'on' : ''}`} aria-current={section === key ? 'page' : undefined}>
@@ -115,15 +116,6 @@ function Shell({ auth, onLogout }: { auth: Auth; onLogout: () => void }) {
           {section === 'body' && <BodyPage />}
           {section === 'settings' && <SettingsPage username={auth.username} onLogout={onLogout} focus={rest[0]} />}
         </main>
-        {showFab && (
-          <button
-            className="fab"
-            aria-label="Log food"
-            onClick={() => openAdd({ day: section === 'diary' && rest[0] ? rest[0] : store.today(), meal: mealForNow() })}
-          >
-            <Icon name="plus" size={26} />
-          </button>
-        )}
         {add && <AddFoodSheet request={add} onClose={closeAdd} />}
       </div>
     </AddFoodContext.Provider>

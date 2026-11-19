@@ -1,19 +1,20 @@
 import { View } from 'react-native';
-import { MEALS, N, addDays, dayOf, formatWater, parseDay, toMl, type Meal } from '@open-nutrition/shared';
-import { CalorieRing } from '../charts';
-import { EntryRow, MacroBars, MealHeader } from '../components';
+import { MEALS, N, addDays, dayOf, parseDay, toMl, type Meal } from '@open-nutrition/shared';
+import { CalorieRing, useMeasuredWidth } from '../charts';
+import { EntryRow, MacroBars, MealCard } from '../components';
 import { Icon } from '../icons';
 import { useLayout } from '../layout';
 import { useNav } from '../nav';
 import { usePrefs, useStore, useToday } from '../state';
-import { Button, Card, Columns, IconButton, MEAL_LABELS, ProgressBar, Screen, T, haptic, kcal, styles, useTheme, useToast } from '../ui';
+import { Button, Card, Columns, IconButton, MEAL_LABELS, ProgressBar, Screen, T, fmtWater, haptic, kcal, styles, useTheme, useToast } from '../ui';
 
 export function TodayScreen() {
   const store = useStore();
   const nav = useNav();
   const toast = useToast();
   const day = useToday();
-  const { wide, width } = useLayout();
+  const { wide, width, height } = useLayout();
+  const [cardW, onCardLayout] = useMeasuredWidth();
   const entries = store.entriesOn(day);
   const totals = store.dayTotals(day);
   const targets = store.targetsOn(day);
@@ -21,13 +22,15 @@ export function TodayScreen() {
   const eaten = totals[N.energy] ?? 0;
   const yesterday = store.entriesOn(addDays(day, -1));
 
+  // Ring beside the numbers only when the card itself is wide enough (its pane, not the window, decides).
+  const sideBySide = (cardW || width) >= 440;
   const summary = (
     <Card>
-      <View style={[wide || width >= 420 ? { flexDirection: 'row', gap: 16, alignItems: 'center' } : { gap: 12 }]}>
-        <View style={{ flex: wide || width >= 420 ? 1 : undefined, alignItems: 'center' }}>
-          <CalorieRing eaten={eaten} budget={budget} max={wide ? 220 : 200} />
+      <View onLayout={onCardLayout} style={[sideBySide ? { flexDirection: 'row', gap: 16, alignItems: 'center' } : { gap: 12 }]}>
+        <View style={{ flex: sideBySide ? 1 : undefined, minWidth: 0, alignItems: 'center' }}>
+          <CalorieRing eaten={eaten} budget={budget} max={sideBySide ? 220 : height < 500 ? 170 : 200} />
         </View>
-        <View style={{ flex: wide || width >= 420 ? 1.2 : undefined, gap: 10 }}>
+        <View style={{ flex: sideBySide ? 1.2 : undefined, minWidth: 0, gap: 10 }}>
           <View style={styles.rowBetween}>
             <Stat label="Budget" value={budget ? kcal(budget) : '—'} />
             <Stat label="Eaten" value={kcal(eaten)} />
@@ -46,23 +49,16 @@ export function TodayScreen() {
         const list = entries.filter((e) => e.meal === meal);
         const yCount = yesterday.filter((e) => e.meal === meal).length;
         return (
-          <Card key={meal} style={{ paddingVertical: 6, paddingHorizontal: 8 }}>
-            <MealHeader
-              meal={meal}
-              total={store.mealTotals(day, meal)}
-              onAdd={() => nav.openAdd({ day, meal })}
-              yesterdayCount={list.length ? 0 : yCount}
-              onCopyYesterday={() => copyYesterday(meal)}
-            />
-            {list.map((e) => (
-              <EntryRow key={e.id} entry={e} onPress={() => nav.push({ name: 'entry', id: e.id })} />
-            ))}
-            {!list.length && (
-              <T small muted style={{ paddingHorizontal: 6, paddingBottom: 6 }}>
-                Nothing logged yet.
-              </T>
-            )}
-          </Card>
+          <MealCard
+            key={meal}
+            meal={meal}
+            total={store.mealTotals(day, meal)}
+            entries={list}
+            onAdd={() => nav.openAdd({ day, meal })}
+            yesterdayCount={yCount}
+            onCopyYesterday={() => copyYesterday(meal)}
+            renderRow={(e) => <EntryRow entry={e} onPress={() => nav.push({ name: 'entry', id: e.id })} />}
+          />
         );
       })}
     </View>
@@ -132,8 +128,8 @@ export function WaterCard({ day }: { day: string }) {
           <View style={{ flex: 1 }}>
             <T bold>Water</T>
             <T small muted>
-              {formatWater(water, unit)}
-              {target ? ` / ${formatWater(target, unit)}` : ''} {unitLabel}
+              {fmtWater(water, unit)}
+              {target ? ` / ${fmtWater(target, unit)}` : ''} {unitLabel}
             </T>
           </View>
         </View>

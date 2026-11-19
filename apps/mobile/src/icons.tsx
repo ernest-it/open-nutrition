@@ -1,4 +1,5 @@
 import Svg, { Circle, Line, Path, Rect } from 'react-native-svg';
+import { useTheme } from './theme';
 
 /** Small stroke icon set drawn on a 24×24 grid (original artwork for this app). */
 export type IconName =
@@ -34,7 +35,8 @@ export type IconName =
   | 'info'
   | 'alert'
   | 'cloud'
-  | 'download';
+  | 'download'
+  | 'user';
 
 export function Icon({ name, size = 24, color, strokeWidth = 2 }: { name: IconName; size?: number; color: string; strokeWidth?: number }) {
   const p = { stroke: color, strokeWidth, fill: 'none', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
@@ -63,6 +65,13 @@ function shape(name: IconName, p: P, color: string) {
           <Line x1={9} y1={8} x2={15} y2={8} {...p} />
           <Line x1={9} y1={12} x2={15} y2={12} {...p} />
           <Line x1={9} y1={16} x2={13} y2={16} {...p} />
+        </>
+      );
+    case 'user':
+      return (
+        <>
+          <Circle cx={12} cy={8} r={4} {...p} />
+          <Path d="M4 20c1.5-4 4.5-6 8-6s6.5 2 8 6" {...p} />
         </>
       );
     case 'plus':
@@ -201,4 +210,21 @@ function shape(name: IconName, p: P, color: string) {
         </>
       );
   }
+}
+
+/**
+ * The Open Nutrition mark (same artwork as the web app's icon.svg): a progress ring around an
+ * apple on a rounded green square.
+ */
+export function Logo({ size = 64 }: { size?: number }) {
+  const { brand: bg, onBrand: fg } = useTheme();
+  return (
+    <Svg width={size} height={size} viewBox="0 0 64 64" accessible={false}>
+      <Rect width={64} height={64} rx={16} fill={bg} />
+      <Circle cx={32} cy={34} r={17} fill="none" stroke={fg} strokeOpacity={0.3} strokeWidth={6} />
+      <Path d="M32 17a17 17 0 0 1 16.2 22.2" fill="none" stroke={fg} strokeWidth={6} strokeLinecap="round" />
+      <Path d="M32 26c-3-5-11-3-11 4 0 6 5 11 8 12 1.2.4 2.2 0 3-.6.8.6 1.8 1 3 .6 3-1 8-6 8-12 0-7-8-9-11-4z" fill={fg} />
+      <Path d="M32 26c0-3 1.5-5 4-6" stroke={fg} strokeWidth={2.5} strokeLinecap="round" fill="none" />
+    </Svg>
+  );
 }

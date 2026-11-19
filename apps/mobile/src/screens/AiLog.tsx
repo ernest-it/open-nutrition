@@ -26,6 +26,7 @@ import {
   Button,
   Card,
   Chips,
+  Columns,
   IconButton,
   Input,
   MEAL_LABELS,
@@ -375,10 +376,8 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
         <ScrollView contentContainerStyle={{ padding: 12, paddingBottom: 32 }} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
           <Notice>Review every item. Adjust the grams, swap anything that was misidentified, and delete what you didn’t eat. Nothing is saved until you tap Add.</Notice>
           {wide ? (
-            <View style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
-              <View style={{ flex: 1.4 }}>{itemsView}</View>
-              <View style={{ flex: 1 }}>{summary}</View>
-            </View>
+            <Columns left={itemsView} right={summary} ratio={1.4} gap={12} />
+
           ) : (
             <>
               {itemsView}

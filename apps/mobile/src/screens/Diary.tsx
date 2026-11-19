@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { BackHandler, PanResponder, ScrollView, SectionList, StyleSheet, View } from 'react-native';
+import { BackHandler, PanResponder, ScrollView, StyleSheet, View } from 'react-native';
 import { MEALS, N, addDays, type DiaryEntry, type Meal } from '@open-nutrition/shared';
-import { CalendarModal, ChoiceModal, DayNav, EntryRow, MacroBars, MealHeader, PromptModal } from '../components';
-import { MAX_WIDE_WIDTH, useLayout } from '../layout';
+import { CalendarModal, ChoiceModal, DayNav, EntryRow, MacroBars, MealCard, PromptModal } from '../components';
+import { useLayout } from '../layout';
 import { useNav } from '../nav';
 import { removeWithUndo, useStore, useToday } from '../state';
-import { Button, Card, Empty, IconButton, MEAL_LABELS, T, formatDay, haptic, kcal, styles, useTheme, useToast } from '../ui';
+import { Button, Card, Empty, IconButton, MEAL_LABELS, SplitView, T, formatDay, haptic, kcal, styles, useTheme, useToast } from '../ui';
 import { EntryEditor } from './Entry';
 
 let lastDiaryDay: string | null = null;
@@ -123,53 +123,29 @@ export function DiaryScreen() {
 
   const list = (
     <View style={{ flex: 1 }} {...pan.panHandlers}>
-      <SectionList
-        sections={sections}
-        keyExtractor={(e) => e.id}
-        stickySectionHeadersEnabled={false}
-        contentContainerStyle={{ padding: tiny ? 12 : 16, paddingBottom: selecting ? toolbarH + 24 : 32 }}
-        ListHeaderComponent={header}
-        renderSectionHeader={({ section }) => {
-          const yCount = yesterday.filter((e) => e.meal === section.meal).length;
-          return (
-            <View style={[s.section, { borderColor: t.border, backgroundColor: t.surface }]}>
-              <MealHeader
-                meal={section.meal}
-                total={store.mealTotals(day, section.meal)}
-                onAdd={() => nav.openAdd({ day, meal: section.meal })}
-                yesterdayCount={section.data.length ? 0 : yCount}
-                onCopyYesterday={() => copyYesterday(section.meal)}
+      <ScrollView contentContainerStyle={{ padding: tiny ? 12 : 16, paddingBottom: selecting ? toolbarH + 24 : 32 }}>
+        {header}
+        {sections.map((section) => (
+          <MealCard
+            key={section.meal}
+            meal={section.meal}
+            total={store.mealTotals(day, section.meal)}
+            entries={section.data}
+            onAdd={() => nav.openAdd({ day, meal: section.meal })}
+            yesterdayCount={yesterday.filter((e) => e.meal === section.meal).length}
+            onCopyYesterday={() => copyYesterday(section.meal)}
+            renderRow={(item) => (
+              <EntryRow
+                entry={item}
+                selecting={selecting}
+                selected={selected.has(item.id) || openId === item.id}
+                onPress={() => open(item)}
+                onLongPress={() => toggle(item.id)}
               />
-            </View>
-          );
-        }}
-        renderItem={({ item, index, section }) => (
-          <View
-            style={[
-              s.item,
-              { borderColor: t.border, backgroundColor: t.surface },
-              index === section.data.length - 1 && s.last,
-            ]}
-          >
-            <EntryRow
-              entry={item}
-              selecting={selecting}
-              selected={selected.has(item.id) || openId === item.id}
-              onPress={() => open(item)}
-              onLongPress={() => toggle(item.id)}
-            />
-          </View>
-        )}
-        renderSectionFooter={({ section }) =>
-          section.data.length ? <View style={{ height: 10 }} /> : (
-            <View style={[s.item, s.last, { borderColor: t.border, backgroundColor: t.surface, marginBottom: 10 }]}>
-              <T small muted style={{ padding: 8 }}>
-                Nothing logged yet.
-              </T>
-            </View>
-          )
-        }
-      />
+            )}
+          />
+        ))}
+      </ScrollView>
       {selecting && (
         <View
           onLayout={(e) => setToolbarH(e.nativeEvent.layout.height)}
@@ -236,21 +212,20 @@ export function DiaryScreen() {
   if (!wide) return list;
   const openEntry = openId ? store.get('diaryEntries', openId) : undefined;
   return (
-    <View style={{ flex: 1, flexDirection: 'row', width: '100%', maxWidth: MAX_WIDE_WIDTH, alignSelf: 'center' }}>
-      <View style={{ flex: 1 }}>{list}</View>
-      <View style={[s.pane, { borderColor: t.border }]}>
-        {openEntry ? (
+    <SplitView
+      left={list}
+      right={
+        openEntry ? (
           <PaneScroll>
             <EntryEditor key={openEntry.id} entry={openEntry} onDone={() => setOpenId(null)} />
           </PaneScroll>
         ) : (
           <Empty icon="diary" title="Select an entry" text="Tap an entry to edit its amount, move it to another meal or day, or delete it." />
-        )}
-      </View>
-    </View>
+        )
+      }
+    />
   );
 }
-
 function PaneScroll({ children }: { children: ReactNode }) {
   return (
     <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
@@ -260,9 +235,6 @@ function PaneScroll({ children }: { children: ReactNode }) {
 }
 
 const s = StyleSheet.create({
-  section: { borderTopLeftRadius: 14, borderTopRightRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderBottomWidth: 0, paddingHorizontal: 8, paddingBottom: 4, marginTop: 6 },
-  item: { borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth, paddingHorizontal: 8 },
-  last: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomLeftRadius: 14, borderBottomRightRadius: 14, paddingBottom: 6 },
   toolbarActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'center' },
   toolbar: {
     position: 'absolute',
@@ -280,5 +252,4 @@ const s = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 8,
   },
-  pane: { flex: 1, borderLeftWidth: StyleSheet.hairlineWidth },
 });

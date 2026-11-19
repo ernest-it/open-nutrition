@@ -1,6 +1,6 @@
 import { useRef, useState, type ComponentRef } from 'react';
-import { Platform, TextInput, View } from 'react-native';
-import { Icon } from '../icons';
+import { Platform, Text, TextInput, View } from 'react-native';
+import { Icon, Logo } from '../icons';
 import { normalizeServerUrl, type Account } from '../state';
 import { Banner, Button, Card, Input, Screen, T, styles, useTheme } from '../ui';
 
@@ -68,7 +68,13 @@ export function ConnectScreen({ onDone }: { onDone: (a: Account) => void }) {
 
   const canLogin = !!username.trim() && !!password;
   return (
-    <Screen title="Open Nutrition">
+    <Screen>
+      <View style={[styles.row, { gap: 14, marginTop: 8, marginBottom: 8 }]}>
+        <Logo size={56} />
+        <Text accessibilityRole="header" maxFontSizeMultiplier={1.6} style={{ flexShrink: 1, color: t.text, fontSize: 28, fontWeight: '700' }}>
+          Open Nutrition
+        </Text>
+      </View>
       <T muted>Track what you eat, privately. Use the app on its own, or sync with your own server: the phone keeps working offline and syncs when it can reach it.</T>
       <Card style={{ marginTop: 16 }}>
         <Input

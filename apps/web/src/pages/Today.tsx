@@ -2,7 +2,7 @@ import { dayOf, fromMl, MEALS, N, parseDay, toMl } from '@open-nutrition/shared'
 import { usePrefs, useStore } from '../state';
 import { CalorieRing } from '../charts';
 import { MealSection } from '../components';
-import { Bar, fmt, grams, Icon, kcal } from '../ui';
+import { Bar, fmt, grams, Icon, kcal, pctOf } from '../ui';
 
 const MACROS = [
   [N.protein, 'Protein', 'm-p'],
@@ -69,10 +69,11 @@ export function DaySummary({ day }: { day: string }) {
                     <span>{label}</span>
                     <span className="muted">
                       {grams(v)}
-                      {tg ? ` / ${grams(tg)}` : ''} g{tg ? ` · ${Math.round((v / tg) * 100)}%` : ''}
+                      {tg ? ` / ${grams(tg)}` : ''} g{tg ? ` · ${pctOf(v, tg)}` : ''}
                     </span>
                   </div>
-                  <Bar value={v} max={tg || Math.max(v, 1)} label={label} />
+                  {/* No target: empty track, not a full bar. */}
+                  <Bar value={v} max={tg} label={label} />
                 </div>
               );
             })}
@@ -125,10 +126,10 @@ export function WaterCard({ day, goalMl }: { day: string; goalMl: number | null 
           <Icon name="minus" />
         </button>
         <button className="grow" onClick={() => store.addWater(step, day)}>
-          +{+fromMl(step, unit).toFixed(0)} {u}
+          +{fmt(fromMl(step, unit))} {u}
         </button>
         <button className="grow" onClick={() => store.addWater(step * 2, day)}>
-          +{+fromMl(step * 2, unit).toFixed(0)} {u}
+          +{fmt(fromMl(step * 2, unit))} {u}
         </button>
       </div>
     </section>

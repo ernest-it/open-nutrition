@@ -4,7 +4,7 @@ import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-
 import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
 import { FoodDbLoader } from './src/foods';
-import { Icon, type IconName } from './src/icons';
+import { Icon, Logo, type IconName } from './src/icons';
 import { useLayout } from './src/layout';
 import { NavContext, type AddOptions, type Nav, type Route, type Tab } from './src/nav';
 import { AccountContext, initStore, loadAccount, saveAccount, store, useFirstSyncDone, useStore, useToday, type Account } from './src/state';
@@ -101,7 +101,10 @@ function Loading() {
   const t = useTheme();
   return (
     <Center>
-      <ActivityIndicator size="large" color={t.accent} accessibilityLabel="Loading" />
+      <View style={{ alignItems: 'center', gap: 20 }}>
+        <Logo size={88} />
+        <ActivityIndicator size="large" color={t.accent} accessibilityLabel="Loading" />
+      </View>
     </Center>
   );
 }
@@ -141,6 +144,17 @@ const RAIL: NavItem[] = [
   { key: 'foods', label: 'Foods', icon: 'food' },
   { key: 'settings', label: 'Settings', icon: 'settings' },
 ];
+/** Rail column width (dp, excluding the left safe-area inset) and item heights per density mode. */
+const RAIL_W = 80;
+const RAIL_ITEM_H = { full: 60, compact: 46, icons: 44 } as const;
+type RailMode = keyof typeof RAIL_ITEM_H;
+/** Densest rail mode whose items all fit in vailable dp (the rail still scrolls if even icons don't fit). */
+function railModeFor(available: number): RailMode {
+  const n = RAIL.length;
+  if (n * RAIL_ITEM_H.full + (n - 1) * 4 + 20 <= available) return 'full';
+  if (n * RAIL_ITEM_H.compact + 10 <= available) return 'compact';
+  return 'icons';
+}
 const MORE_TABS: Tab[] = ['more', 'body', 'foods', 'settings'];
 const ROOTS: Record<Tab, Route> = {
   today: { name: 'today' },
@@ -257,6 +271,7 @@ function Main({ onSignOut }: { onSignOut: () => Promise<void> }) {
   };
 
   const pushed = stack.length > 1;
+  const railMode = railModeFor(layout.height - insets.top - insets.bottom);
   const content = (
     <View style={{ flex: 1 }}>
       {pushed && (
@@ -285,13 +300,19 @@ function Main({ onSignOut }: { onSignOut: () => Promise<void> }) {
           <View
             style={[
               styles.rail,
-              { backgroundColor: t.surface, borderColor: t.border, paddingLeft: insets.left, paddingTop: insets.top, paddingBottom: insets.bottom },
+              { width: RAIL_W + insets.left, backgroundColor: t.surface, borderColor: t.border, paddingLeft: insets.left, paddingTop: insets.top, paddingBottom: insets.bottom },
             ]}
           >
-            <ScrollView contentContainerStyle={{ paddingVertical: 8, gap: layout.height < 500 ? 0 : 4, alignItems: 'center' }} showsVerticalScrollIndicator={false}>
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ flexGrow: 1, paddingVertical: railMode === 'full' ? 8 : 4, gap: railMode === 'full' ? 4 : 0, alignItems: 'center' }}
+              showsVerticalScrollIndicator={railMode === 'icons'}
+            >
               {RAIL.map((x) => {
                 const active = x.key === tab;
                 const isAdd = x.key === 'add';
+                // The Add button never needs a caption; in 'icons' mode no item has one (they keep their accessibility label).
+                const showLabel = !isAdd && railMode !== 'icons';
                 return (
                   <Pressable
                     key={x.key}
@@ -299,13 +320,26 @@ function Main({ onSignOut }: { onSignOut: () => Promise<void> }) {
                     accessibilityRole={isAdd ? 'button' : 'tab'}
                     accessibilityLabel={isAdd ? 'Add food' : x.label}
                     accessibilityState={isAdd ? undefined : { selected: active }}
-                    style={[styles.railItem, layout.height < 500 && { minHeight: 48, paddingVertical: 2 }]}
+                    style={[styles.railItem, railMode !== 'full' && styles.railItemCompact, isAdd && { marginBottom: railMode === 'full' ? 4 : 2 }]}
                   >
-                    <View style={[styles.railIcon, { backgroundColor: isAdd ? t.accent : active ? t.accentSoft : 'transparent' }]}>
+                    <View
+                      style={[
+                        styles.railIcon,
+                        railMode !== 'full' && styles.railIconCompact,
+                        isAdd && styles.railAdd,
+                        // Inactive items paint the rail colour rather than 'transparent': switching from transparent to a colour
+                        // later can drop the rounded corners on Android, leaving a square highlight.
+                        { backgroundColor: isAdd ? t.accent : active ? t.accentSoft : t.surface },
+                      ]}
+                    >
                       <Icon name={x.icon} size={22} color={isAdd ? t.onAccent : active ? t.accent : t.muted} />
                     </View>
-                    {!(isAdd && layout.height < 500) && (
-                      <Text numberOfLines={1} maxFontSizeMultiplier={1.2} style={{ fontSize: 11, color: active ? t.accent : t.muted, fontWeight: active ? '700' : '500' }}>
+                    {showLabel && (
+                      <Text
+                        numberOfLines={1}
+                        maxFontSizeMultiplier={1.2}
+                        style={{ fontSize: railMode === 'full' ? 11 : 10, color: active ? t.accent : t.muted, fontWeight: active ? '700' : '500' }}
+                      >
                         {x.label}
                       </Text>
                     )}
@@ -315,7 +349,7 @@ function Main({ onSignOut }: { onSignOut: () => Promise<void> }) {
             </ScrollView>
           </View>
         ) : null}
-        <View style={{ flex: 1, paddingTop: insets.top, paddingRight: insets.right, paddingLeft: layout.rail ? 0 : insets.left, paddingBottom: layout.rail ? insets.bottom : 0 }}>
+        <View style={{ flex: 1, minWidth: 0, paddingTop: insets.top, paddingRight: insets.right, paddingLeft: layout.rail ? 0 : insets.left, paddingBottom: layout.rail ? insets.bottom : 0 }}>
           {content}
         </View>
         {!layout.rail && (
@@ -404,7 +438,10 @@ const styles = StyleSheet.create({
   tabBar: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, alignItems: 'center' },
   tab: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 54, paddingVertical: 4, paddingHorizontal: 2, gap: 2 },
   addBtn: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
-  rail: { width: 84, borderRightWidth: StyleSheet.hairlineWidth, boxSizing: 'content-box' },
-  railItem: { alignItems: 'center', justifyContent: 'center', minHeight: 60, width: 80, paddingVertical: 4, gap: 2 },
-  railIcon: { width: 52, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  rail: { borderRightWidth: StyleSheet.hairlineWidth },
+  railItem: { alignItems: 'center', justifyContent: 'center', minHeight: RAIL_ITEM_H.full, width: RAIL_W, paddingVertical: 4, gap: 2 },
+  railItemCompact: { minHeight: RAIL_ITEM_H.compact, paddingVertical: 1, gap: 1 },
+  railIcon: { width: 52, height: 34, borderRadius: 17, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  railIconCompact: { height: 28, borderRadius: 14 },
+  railAdd: { height: 44, borderRadius: 22, width: 56 },
 });

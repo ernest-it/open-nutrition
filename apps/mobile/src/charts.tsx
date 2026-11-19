@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Text, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Circle, G, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
+import { N, statusFor } from '@open-nutrition/shared';
+import { formatNumber } from './format';
 import { useTheme } from './ui';
 
 /** Measure the width a chart may use (charts never use fixed pixel sizes). */
@@ -25,6 +27,8 @@ export function CalorieRing({ eaten, budget, max = 240 }: { eaten: number; budge
   const over = share > 1 ? Math.min(1, share - 1) : 0;
   const remaining = Math.round(budget - eaten);
   const overBudget = remaining < 0;
+  // Same rule as the web: calories are a band, so up to 110% of the budget still counts as on target.
+  const status = statusFor(N.energy, eaten, budget);
   return (
     <View onLayout={onLayout} style={{ width: '100%', alignItems: 'center' }}>
       {width > 0 && (
@@ -46,7 +50,7 @@ export function CalorieRing({ eaten, budget, max = 240 }: { eaten: number; budge
                   cx={size / 2}
                   cy={size / 2}
                   r={r}
-                  stroke={overBudget ? t.warn : t.accent}
+                  stroke={status === 'over' ? t.warn : t.accent}
                   strokeWidth={stroke}
                   fill="none"
                   strokeLinecap="round"
@@ -58,7 +62,7 @@ export function CalorieRing({ eaten, budget, max = 240 }: { eaten: number; budge
                   cx={size / 2}
                   cy={size / 2}
                   r={r}
-                  stroke={t.danger}
+                  stroke={status === 'over' ? t.danger : t.warn}
                   strokeWidth={stroke}
                   fill="none"
                   strokeLinecap="round"
@@ -72,9 +76,9 @@ export function CalorieRing({ eaten, budget, max = 240 }: { eaten: number; budge
               numberOfLines={1}
               adjustsFontSizeToFit
               maxFontSizeMultiplier={1.2}
-              style={{ color: overBudget ? t.danger : t.text, fontSize: size * 0.2, fontWeight: '800' }}
+              style={{ color: status === 'over' ? t.danger : t.text, fontSize: size * 0.2, fontWeight: '800' }}
             >
-              {budget > 0 ? Math.abs(remaining).toLocaleString() : Math.round(eaten).toLocaleString()}
+              {budget > 0 ? formatNumber(Math.abs(remaining), 0) : formatNumber(Math.round(eaten), 0)}
             </Text>
             <Text numberOfLines={1} adjustsFontSizeToFit maxFontSizeMultiplier={1.2} style={{ color: t.muted, fontSize: Math.max(12, size * 0.065) }}>
               {budget > 0 ? (overBudget ? 'kcal over' : 'kcal left') : 'kcal eaten'}

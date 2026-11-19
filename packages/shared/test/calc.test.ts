@@ -179,3 +179,22 @@ describe('status, trends, top foods', () => {
     expect(top[0]!.share).toBeCloseTo(1200 / 1400);
   });
 });
+
+import { daysForAverage, statusFor } from '../src';
+
+describe('statusFor', () => {
+  it('treats calories as an 80–110% band', () => {
+    expect(statusFor('208', 1500, 2000)).toBe('under');
+    expect(statusFor('208', 1800, 2000)).toBe('ok');
+    expect(statusFor('208', 2300, 2000)).toBe('over');
+  });
+  it('uses limits and floors for other nutrients, null without a target', () => {
+    expect(statusFor('307', 2500, 2300)).toBe('over');
+    expect(statusFor('203', 100, 150)).toBe('under');
+    expect(statusFor('269', 50, null)).toBeNull();
+  });
+  it('leaves an in-progress today out of averages', () => {
+    expect(daysForAverage(['2026-11-17', '2026-11-18', '2026-11-19'], '2026-11-19')).toEqual(['2026-11-17', '2026-11-18']);
+    expect(daysForAverage(['2026-11-19'], '2026-11-19')).toEqual(['2026-11-19']);
+  });
+});

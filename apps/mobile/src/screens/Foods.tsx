@@ -16,7 +16,8 @@ import {
 import { FoodRow, FoodSearch, defaultAmount, macroLine, sourceLabel } from '../components';
 import { useLayout } from '../layout';
 import { useNav } from '../nav';
-import { useStore } from '../state';
+import { useStore, useToday } from '../state';
+import { Icon } from '../icons';
 import {
   Button,
   Card,
@@ -50,8 +51,10 @@ type FoodsTab = 'mine' | 'favorites' | 'recipes' | 'meals';
 let lastTab: FoodsTab = 'mine';
 
 export function FoodsScreen() {
+  const t = useTheme();
   const store = useStore();
   const nav = useNav();
+  const today = useToday();
   const { tiny, wide } = useLayout();
   const [tab, setTabState] = useState<FoodsTab>(lastTab);
   const setTab = (v: FoodsTab) => {
@@ -66,15 +69,22 @@ export function FoodsScreen() {
   const recipes = store.all('recipes').sort((a, b) => a.name.localeCompare(b.name));
   const meals = store.all('savedMeals').sort((a, b) => a.name.localeCompare(b.name));
 
+  const newFood = () => nav.push({ name: 'foodEdit' });
+  const newRecipe = () => nav.push({ name: 'recipeEdit' });
+  const chevron = <Icon name="chevronRight" size={18} color={t.muted} />;
+
   const head = (
     <View>
       <Title
         right={
-          tab === 'recipes' ? (
-            <Button small icon="plus" title="New recipe" variant="primary" onPress={() => nav.push({ name: 'recipeEdit' })} />
-          ) : tab === 'mine' ? (
-            <Button small icon="plus" title="New food" variant="primary" onPress={() => nav.push({ name: 'foodEdit' })} />
-          ) : undefined
+          // Always the same height, with or without a button, so the tabs below never jump.
+          <View style={{ minHeight: 44, justifyContent: 'center' }}>
+            {tab === 'recipes' ? (
+              <Button small icon="plus" title="New recipe" variant="primary" onPress={newRecipe} />
+            ) : tab === 'mine' ? (
+              <Button small icon="plus" title="New food" variant="primary" onPress={newFood} />
+            ) : null}
+          </View>
         }
       >
         Foods
@@ -104,9 +114,13 @@ export function FoodsScreen() {
         renderItem={({ item }) => <FoodRow food={item} onPress={() => nav.push({ name: 'foodEdit', id: item.id })} />}
         ListEmptyComponent={
           tab === 'mine' ? (
-            <Empty icon="food" title="No custom foods yet" text="Create foods from a label, or scan a barcode. Scanned products you log appear here too." />
+            <Empty icon="food" title="No custom foods yet" text="Create foods from a label, or scan a barcode. Scanned products you log appear here too.">
+              <Button icon="plus" title="New food" variant="primary" onPress={newFood} style={{ marginTop: 8 }} />
+            </Empty>
           ) : (
-            <Empty icon="star" title="No favourites yet" text="Tap the star on any food to keep it at the top of your search." />
+            <Empty icon="star" title="No favourites yet" text="Tap the star on any food to keep it at the top of your search.">
+              <Button icon="search" title="Find a food" onPress={() => nav.openAdd({ day: today, start: 'search' })} style={{ marginTop: 8 }} />
+            </Empty>
           )
         }
       />
@@ -126,10 +140,15 @@ export function FoodsScreen() {
               title={item.name}
               subtitle={`${plural(item.ingredients.length, 'ingredient')} · ${kcal(per[N.energy])} kcal per portion · makes ${+item.portions.toFixed(2)}`}
               onPress={() => nav.push({ name: 'recipeEdit', id: item.id })}
+              right={chevron}
             />
           );
         }}
-        ListEmptyComponent={<Empty icon="food" title="No recipes yet" text="Add the ingredients once, then log portions of it any time." />}
+        ListEmptyComponent={
+          <Empty icon="food" title="No recipes yet" text="Add the ingredients once, then log portions of it any time.">
+            <Button icon="plus" title="New recipe" variant="primary" onPress={newRecipe} style={{ marginTop: 8 }} />
+          </Empty>
+        }
       />
     );
   }
@@ -146,10 +165,15 @@ export function FoodsScreen() {
             title={item.name}
             subtitle={`${plural(item.items.length, 'item')} · ${kcal(total[N.energy])} kcal`}
             onPress={() => nav.push({ name: 'savedMeal', id: item.id })}
+            right={chevron}
           />
         );
       }}
-      ListEmptyComponent={<Empty icon="bookmark" title="No saved meals yet" text="In the Diary, long-press entries and choose “Save as meal”." />}
+      ListEmptyComponent={
+        <Empty icon="bookmark" title="No saved meals yet" text="In the Diary, long-press entries and choose “Save as meal”.">
+          <Button icon="diary" title="Open the diary" onPress={() => nav.switchTab('diary')} style={{ marginTop: 8 }} />
+        </Empty>
+      }
     />
   );
 }

@@ -7,7 +7,7 @@ import {
   NUTRIENTS,
   NUTRIENT_BY_KEY,
   addDays,
-  formatNutrient,
+
   parseDay,
   todayLocal,
   type DiaryEntry,
@@ -32,6 +32,7 @@ import {
   ProgressBar,
   T,
   Toggle,
+  fmtNutrient,
   grams1,
   haptic,
   kcal,
@@ -158,8 +159,8 @@ export function MealHeader({
 }) {
   const t = useTheme();
   return (
-    <View style={[styles.rowBetween, { paddingTop: 8, paddingLeft: 6 }]}>
-      <View style={{ flex: 1 }}>
+    <View style={[styles.rowBetween, { paddingVertical: 8, paddingLeft: 14, paddingRight: 10, gap: 4 }]}>
+      <View style={{ flex: 1, minWidth: 0 }}>
         <T bold style={{ fontSize: 17 }}>
           {MEAL_LABELS[meal]}
         </T>
@@ -171,6 +172,53 @@ export function MealHeader({
         <IconButton icon="copy" label={`Copy yesterday's ${MEAL_LABELS[meal].toLowerCase()} (${yesterdayCount} items)`} onPress={onCopyYesterday} color={t.muted} />
       )}
       <IconButton icon="plus" label={`Add to ${MEAL_LABELS[meal]}`} onPress={onAdd} bg={t.accentSoft} />
+    </View>
+  );
+}
+
+/** 1 dp line between rows (hairlines vanish at some fractional positions on Android, so rows looked unevenly separated). */
+export function RowSeparator({ inset = 14 }: { inset?: number }) {
+  const t = useTheme();
+  return <View style={{ height: 1, marginHorizontal: inset, backgroundColor: t.border }} />;
+}
+
+/**
+ * One meal as a card: header (name, totals, copy-yesterday and a 44 pt add button with room around
+ * it) followed by its entries, each separated by the same line. Used by Today and Diary.
+ */
+export function MealCard({
+  meal,
+  total,
+  entries,
+  onAdd,
+  yesterdayCount,
+  onCopyYesterday,
+  renderRow,
+}: {
+  meal: Meal;
+  total: NutrientMap;
+  entries: DiaryEntry[];
+  onAdd: () => void;
+  yesterdayCount?: number;
+  onCopyYesterday?: () => void;
+  renderRow: (e: DiaryEntry) => ReactElement;
+}) {
+  const t = useTheme();
+  return (
+    <View style={[styles.card, s.mealCard, { backgroundColor: t.surface, borderColor: t.border }]}>
+      <MealHeader meal={meal} total={total} onAdd={onAdd} yesterdayCount={entries.length ? 0 : yesterdayCount} onCopyYesterday={onCopyYesterday} />
+      {entries.map((e) => (
+        <View key={e.id}>
+          <RowSeparator />
+          <View style={{ paddingHorizontal: 8, paddingVertical: 2 }}>{renderRow(e)}</View>
+        </View>
+      ))}
+      {!entries.length && (
+        <T small muted style={{ paddingHorizontal: 14, paddingBottom: 12 }}>
+          Nothing logged yet.
+        </T>
+      )}
+      {entries.length > 0 && <View style={{ height: 6 }} />}
     </View>
   );
 }
@@ -396,7 +444,7 @@ export function NutrientTable({ nutrients, targets }: { nutrients: NutrientMap; 
               {d.name}
             </T>
             <T small muted={false}>
-              {formatNutrient(d.key, v)}
+              {fmtNutrient(d.key, v)}
               {target ? <Text style={{ color: t.muted }}>{`  ${Math.round((v / target) * 100)}%`}</Text> : null}
             </T>
           </View>
@@ -669,6 +717,7 @@ export function ChoiceModal<V extends string>({
 }
 
 const s = StyleSheet.create({
+  mealCard: { padding: 0, overflow: 'hidden' },
   check: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   grid: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 4 },
   cell: { width: `${100 / 7}%`, height: 46, alignItems: 'center', justifyContent: 'center' },

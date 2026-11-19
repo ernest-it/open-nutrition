@@ -450,15 +450,18 @@ export const fmt = (v: number, digits = 0, fixed = false) =>
 export const signed = (v: number, digits = 1) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${fmt(Math.abs(v), digits, true)}`;
 /** formatNutrient with thousands separators ("2,300 mg"). */
 export const nutrientText = (key: string, v: number) => formatNutrient(key, v).replace(/^-?\d+(\.\d+)?/, (m) => {
-    // Precision that matches the size: "4,211 mg", "37.4 g", "0.37 µg".
+    // Same precision as `grams` (so "74 g" reads the same on Today, Diary and Nutrients): "4,211 mg", "37 g", "3.4 g", "0.37 µg".
     const n = Number(m);
-    return fmt(n, Math.abs(n) >= 100 ? 0 : Math.abs(n) >= 10 ? 1 : 2);
+    return fmt(n, Math.abs(n) >= 10 ? 0 : Math.abs(n) >= 1 ? 1 : 2);
   });
-export const kcal = (v: number | undefined) => Math.round(v ?? 0).toLocaleString();
+export const kcal = (v: number | undefined) => fmt(Math.round(v ?? 0));
+/** Grams for display: whole above 10, one decimal below, with locale separators ("1,250", "7.5"). */
 export const grams = (v: number | undefined) => {
   const x = v ?? 0;
-  return x >= 10 ? String(Math.round(x)) : String(round(x, 1));
+  return fmt(x, Math.abs(x) >= 10 ? 0 : 1);
 };
+/** Whole percent of a target ("57%"); empty when there is no target. */
+export const pctOf = (v: number, target: number | null | undefined) => (target && target > 0 ? `${fmt(Math.round((v / target) * 100))}%` : '');
 
 /** Parse a user-typed decimal ("1,5" works too); null when empty or invalid. */
 export function num(s: string): number | null {
@@ -512,7 +515,8 @@ export function NumberInput({
   );
 }
 
-export function Bar({ value, max, status, label, className = '' }: { value: number; max: number; status?: string; label?: string; className?: string }) {
+/** Progress bar. With no target (`max` 0) it draws an empty track rather than a full bar. */
+export function Bar({ value, max, status, label, className = '' }: { value: number; max: number; status?: string | null; label?: string; className?: string }) {
   const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
   return (
     <div className={`bar-track ${status ?? ''} ${className}`} role="progressbar" aria-valuenow={Math.round(value)} aria-valuemax={Math.round(max)} aria-label={label}>

@@ -7,7 +7,7 @@
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "backgroundColor": "#f4f5f7",
+    "backgroundColor": "#f5f6f3",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "org.opennutrition.app",
@@ -24,13 +24,17 @@
       "package": "org.opennutrition.app",
       "versionCode": 1,
       "adaptiveIcon": {
-        "backgroundColor": "#1f9d55",
+        "backgroundColor": "#127a52",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "permissions": ["android.permission.CAMERA"],
-      "blockedPermissions": ["android.permission.RECORD_AUDIO"],
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
@@ -66,7 +70,20 @@
         }
       ],
       "expo-sharing",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "backgroundColor": "#127a52",
+          "dark": {
+            "image": "./assets/splash-icon.png",
+            "backgroundColor": "#127a52"
+          }
+        }
+      ]
     ]
   }
 }

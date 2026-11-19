@@ -27,7 +27,7 @@ import {
 import { api, ApiError, errorMessage, loadAuth, setPrefs, usePrefs, useStore, store } from '../state';
 import { getAiStatus, type AiStatus } from '../foodApi';
 import { AiPrivacyNote, formatUsd, modelLabel } from './AiLog';
-import { download, Icon, kcal, Modal, NumberInput, Segmented } from '../ui';
+import { download, fmt, Icon, kcal, Modal, NumberInput, Segmented } from '../ui';
 import { InlineError, Spinner, useConfirm, useToast } from '../feedback';
 
 interface SessionInfo {
@@ -196,7 +196,7 @@ function TargetsSection() {
           <select value={p.goalKgPerWeek} onChange={(e) => setP({ ...p, goalKgPerWeek: Number(e.target.value) })}>
             {[...new Set([...GOAL_RATES_KG, p.goalKgPerWeek])].sort((a, b) => a - b).map((r) => (
               <option key={r} value={r}>
-                {r === 0 ? 'Maintain weight' : `${r < 0 ? "Lose" : "Gain"} ${+fromKg(Math.abs(r), wu).toFixed(2)} ${wu} per week`}
+                {r === 0 ? 'Maintain weight' : `${r < 0 ? "Lose" : "Gain"} ${fmt(fromKg(Math.abs(r), wu), 2)} ${wu} per week`}
               </option>
             ))}
           </select>
@@ -215,10 +215,11 @@ function TargetsSection() {
               onChange={(v) => setP({ ...p, macroSplit: { ...split, [k]: v ?? 0 } })}
             />
           ))}
-          <small className={splitSum === 100 || p.proteinGPerKg != null ? 'muted' : 'error'}>
-            {p.proteinGPerKg != null ? 'Protein set by g/kg; carbs and fat share the rest in this ratio.' : `Total ${splitSum}% (must be 100)`}
-          </small>
         </fieldset>
+        {/* Help sits under the whole row so the g/kg input and the % inputs line up. */}
+        <small className={`form-note ${splitSum === 100 || p.proteinGPerKg != null ? 'muted' : 'error'}`}>
+          {p.proteinGPerKg != null ? 'Protein set by g/kg; carbs and fat share the rest in this ratio.' : `Macro split total ${splitSum}% (must be 100)`}
+        </small>
       </div>
       {canCalc && (
         <p className="muted small">

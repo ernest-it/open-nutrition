@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { daySchema, MEALS, N } from '@open-nutrition/shared';
+import { daySchema, MEALS, N, statusFor } from '@open-nutrition/shared';
 import { navigate } from '../router';
 import { useBreakpoint, useLoggedDays, useStore } from '../state';
 import { MealSection, NutrientSummary, plural } from '../components';
@@ -16,6 +16,7 @@ export function DiaryPage({ day: routeDay }: { day?: string }) {
   const totals = store.dayTotals(day);
   const target = store.targetsOn(day);
   const budget = target?.nutrients[N.energy] ?? 0;
+  const eaten = totals[N.energy] ?? 0;
   const marked = useLoggedDays();
 
   const calendar = <Calendar value={day} marked={marked} onPick={(d) => { go(d); setCalOpen(false); }} />;
@@ -32,9 +33,9 @@ export function DiaryPage({ day: routeDay }: { day?: string }) {
           <section className="card">
             <h3>{dayLabel(day, true)}</h3>
             <NutrientSummary n={totals} />
-            {budget > 0 && <Bar value={totals[N.energy] ?? 0} max={budget} status={(totals[N.energy] ?? 0) > budget * 1.1 ? 'over' : 'ok'} label="Calories" />}
+            <Bar value={eaten} max={budget} status={statusFor(N.energy, eaten, budget)} label="Calories" />
             <p className="muted small">
-              {budget > 0 ? `${kcal(totals[N.energy])} of ${kcal(budget)} kcal · ` : ''}
+              {budget > 0 ? `${kcal(eaten)} of ${kcal(budget)} kcal · ` : ''}
               {entries.length ? plural(entries.length, 'item') : 'Nothing logged yet'}
             </p>
             <a className="link small" href={`#/nutrients/${day}`}>

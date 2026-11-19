@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { fmt, useElementWidth } from './ui';
+import { N, statusFor } from '@open-nutrition/shared';
+import { fmt, kcal, useElementWidth } from './ui';
 
 /** Calorie ring: sized from its container's measured width (capped), never fixed pixels. */
 export function CalorieRing({ eaten, budget, max = 240 }: { eaten: number; budget: number; max?: number }) {
@@ -9,17 +10,19 @@ export function CalorieRing({ eaten, budget, max = 240 }: { eaten: number; budge
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const frac = budget > 0 ? eaten / budget : 0;
+  // "kcal over" is plain arithmetic; the red colour follows the shared calorie band (over 110%), like every other status.
   const over = budget > 0 && eaten > budget;
+  const status = statusFor(N.energy, eaten, budget);
   const remaining = Math.round(budget - eaten);
   return (
     <div ref={ref} className="ring-wrap">
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`${Math.round(eaten)} of ${Math.round(budget)} kcal eaten`}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={budget > 0 ? `${kcal(eaten)} of ${kcal(budget)} kcal eaten` : `${kcal(eaten)} kcal eaten`}>
         <circle cx={size / 2} cy={size / 2} r={r} className="ring-track" strokeWidth={stroke} fill="none" />
         <circle
           cx={size / 2}
           cy={size / 2}
           r={r}
-          className={`ring-fill ${over ? 'over' : ''}`}
+          className={`ring-fill ${status ?? ''}`}
           strokeWidth={stroke}
           fill="none"
           strokeLinecap="round"
@@ -27,7 +30,7 @@ export function CalorieRing({ eaten, budget, max = 240 }: { eaten: number; budge
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
         <text x="50%" y="46%" textAnchor="middle" className="ring-big" style={{ fontSize: size * 0.17 }}>
-          {budget > 0 ? Math.abs(remaining).toLocaleString() : Math.round(eaten).toLocaleString()}
+          {budget > 0 ? kcal(Math.abs(remaining)) : kcal(eaten)}
         </text>
         <text x="50%" y="60%" textAnchor="middle" className="ring-small" style={{ fontSize: Math.max(11, size * 0.065) }}>
           {budget > 0 ? (over ? 'kcal over' : 'kcal left') : 'kcal eaten'}
