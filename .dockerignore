@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+.git
+data
+apps/mobile/*
+!apps/mobile/assets
+apps/mobile/assets/*
+!apps/mobile/assets/foods.db
+docs
+deploy
+*.md
+!LICENSING.md
+!NOTICE.md

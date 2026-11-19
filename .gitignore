@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.log
+.env
+# Local server data (SQLite databases). The food DB build scripts in /data are tracked.
+/data/*
+!/data/build-foods-db.mjs
+!/data/README.md
+!/data/.gitignore
+apps/server/data/
+*.db
+*.db-wal
+*.db-shm
+!apps/mobile/assets/foods.db
+apps/mobile/.expo/
+apps/mobile/ios/
+apps/mobile/android/
+.DS_Store
+coverage/

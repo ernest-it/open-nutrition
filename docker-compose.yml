@@ -1,0 +1,33 @@
+# Quick start:  docker compose up -d   ->  http://localhost:8080
+services:
+  open-nutrition:
+    build: .
+    # image: ghcr.io/<you>/open-nutrition:latest   # once published by CI
+    container_name: open-nutrition
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # The first account can always be created and becomes admin.
+      # Set to "true" to let more people register (family server).
+      ALLOW_REGISTRATION: "false"
+      # Set when running behind a reverse proxy (Caddy, Traefik, nginx).
+      TRUST_PROXY: "false"
+      LOG_LEVEL: info
+      TZ: UTC
+      # The bundled USDA food database ships in the image at /app/foods.db.
+      # FOOD_DB_PATH: /app/foods.db
+      # --- Barcode lookups (Open Food Facts, no key needed) ---
+      # Optional fallback to USDA FoodData Central branded foods (free key: https://fdc.nal.usda.gov/api-key-signup):
+      # USDA_API_KEY: your-fdc-key
+      # --- AI meal estimates from photos/descriptions (optional; Anthropic Claude only for now) ---
+      # LLM_PROVIDER: anthropic
+      # LLM_API_KEY: sk-ant-...        # or ANTHROPIC_API_KEY
+      # LLM_MODEL: claude-opus-5-5     # or claude-sonnet-5-5 / claude-haiku-5-5
+      # LLM_EFFORT: low                # low | medium | high
+      # AI_MONTHLY_LIMIT: "0"          # estimates per user per month, 0 = unlimited
+    volumes:
+      - open-nutrition-data:/data
+
+volumes:
+  open-nutrition-data:

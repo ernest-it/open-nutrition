@@ -1,0 +1,108 @@
+# Open Nutrition on Kubernetes.  kubectl apply -k deploy/k8s
+# SQLite => exactly one replica with a ReadWriteOnce volume and Recreate strategy.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: open-nutrition
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: open-nutrition-data
+  namespace: open-nutrition
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open-nutrition
+  namespace: open-nutrition
+data:
+  ALLOW_REGISTRATION: "false"
+  TRUST_PROXY: "true"
+  LOG_LEVEL: info
+  # AI meal estimates (Anthropic Claude). Put LLM_API_KEY (or ANTHROPIC_API_KEY) in the
+  # open-nutrition-secrets Secret below; USDA_API_KEY (optional barcode fallback) too.
+  # LLM_PROVIDER: anthropic
+  # LLM_MODEL: claude-opus-5-5
+  # LLM_EFFORT: low
+  # AI_MONTHLY_LIMIT: "0"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-nutrition
+  namespace: open-nutrition
+  labels: { app: open-nutrition }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: open-nutrition }
+  template:
+    metadata:
+      labels: { app: open-nutrition }
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        runAsNonRoot: true
+      containers:
+        - name: open-nutrition
+          image: ghcr.io/ernest-it/open-nutrition:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+          envFrom:
+            - configMapRef: { name: open-nutrition }
+            # kubectl -n open-nutrition create secret generic open-nutrition-secrets --from-literal=LLM_API_KEY=sk-ant-...
+            - secretRef: { name: open-nutrition-secrets, optional: true }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          readinessProbe:
+            httpGet: { path: /api/v1/health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/v1/health, port: http }
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: open-nutrition-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-nutrition
+  namespace: open-nutrition
+spec:
+  selector: { app: open-nutrition }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+# Edit host/ingressClassName/TLS for your cluster (Traefik on k3s, ingress-nginx, ...).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: open-nutrition
+  namespace: open-nutrition
+spec:
+  rules:
+    - host: nutrition.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: open-nutrition, port: { name: http } }
