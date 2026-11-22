@@ -9,6 +9,7 @@ import { foodDbError } from '../foods';
 import { Icon, type IconName } from '../icons';
 import { useLayout } from '../layout';
 import { useNav } from '../nav';
+import { LocalDataCard } from '../localData';
 import { setPrefs, useAccount, usePrefs, useStore } from '../state';
 import { Banner, Button, Card, Chips, Columns, Input, ListRow, Notice, Screen, Segmented, T, Toggle, haptic, styles, useConfirm, useTheme, useToast } from '../ui';
 import { TargetsSummary } from './Profile';
@@ -78,7 +79,7 @@ export function SettingsScreen({ onSignOut }: { onSignOut: () => Promise<void> }
           }
         : {
             title: 'Leave local mode?',
-            message: 'Your local data stays on this phone and comes back if you choose local mode again.',
+            message: 'Your local data stays on this phone. After you sign in to a server you can move it into your account.',
             confirmLabel: 'Continue',
           },
     );
@@ -142,6 +143,7 @@ export function SettingsScreen({ onSignOut }: { onSignOut: () => Promise<void> }
         loading={leaving}
       />
     </Card>,
+    <LocalDataCard key="local" />,
     <Card key="data">
       <SectionTitle icon="download">Your data</SectionTitle>
       <T small muted>

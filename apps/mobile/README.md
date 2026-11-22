@@ -9,7 +9,7 @@ npm run typecheck
 npm run export:android    # verifies the production JS bundle
 ```
 
-- **First launch:** connect to a server URL (LAN `http://` is allowed), or choose **local-only** mode.
+- **First launch:** connect to a server URL (LAN `http://` is allowed), or choose **local-only** mode. Connecting a server later (Settings → Connect a server) offers to move the local-only data into the account (`moveLocalDataToAccount` in `src/state.ts`: rows are merged last-write-wins and the local copy is deleted only after everything has uploaded). Until then, Settings shows a "Data from local mode" card to move or delete it.
 - **Storage:**
   - Data is kept in on-device SQLite (`expo-sqlite/kv-store`).
   - The account token is kept in the OS keychain (`expo-secure-store`).

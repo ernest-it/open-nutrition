@@ -326,7 +326,7 @@ function AiSection() {
               <select value={prefs.aiModel} onChange={(e) => setPrefs({ aiModel: e.target.value })}>
                 {models.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.label} (~{formatUsd(typicalMealCostUsd(m.id))}/meal)
+                    {m.label.split(' — ')[0]} · ~{formatUsd(typicalMealCostUsd(m.id))}/meal
                   </option>
                 ))}
               </select>
@@ -341,7 +341,7 @@ function AiSection() {
             </label>
           </div>
           <p className="muted small">
-            {modelLabel(prefs.aiModel)} costs roughly {formatUsd(typicalMealCostUsd(prefs.aiModel))} per meal. Costs are paid by whoever runs
+            {AI_MODELS.find((m) => m.id === prefs.aiModel)?.label ?? modelLabel(prefs.aiModel)}: roughly {formatUsd(typicalMealCostUsd(prefs.aiModel))} per meal. Costs are paid by whoever runs
             this server{status.monthlyLimit > 0 ? `; your account can make ${status.monthlyLimit} estimates a month` : ''}.
             {status.monthlyLimit > 0 && ` Used this month: ${status.usedThisMonth}.`}
           </p>

@@ -257,6 +257,33 @@ export class NutritionStore {
     this.emit();
   }
 
+  /**
+   * Bring rows from another snapshot (e.g. this phone's local-only data) into this store and
+   * mark them pending so the next sync uploads them. Last-write-wins like sync: a row only
+   * replaces an existing one with the same id when it is newer. Deleted rows and built-in
+   * (read-only) foods are skipped. Returns how many rows were taken.
+   */
+  mergeSnapshot(snap: Pick<Snapshot, 'rows'>): number {
+    let n = 0;
+    for (const c of COLLECTION_NAMES) {
+      for (const r of (snap.rows[c] ?? []) as RowTypes[typeof c][]) {
+        if (!r?.id || r.deletedAt || r.id.startsWith(BUILTIN_PREFIX)) continue;
+        const cur = this.maps[c].get(r.id);
+        if (cur && cur.updatedAt >= r.updatedAt) continue;
+        (this.maps[c] as Map<string, unknown>).set(r.id, r);
+        this.pending[c].add(r.id);
+        n++;
+      }
+    }
+    if (n) this.emit();
+    return n;
+  }
+
+  /** True while any of the given rows still has to be uploaded. */
+  isPending(c: CollectionName, id: string): boolean {
+    return this.pending[c].has(id);
+  }
+
   // ---- sync ---------------------------------------------------------------
   sync(): Promise<SyncResponse | null> {
     if (!this.server) return Promise.resolve(null);

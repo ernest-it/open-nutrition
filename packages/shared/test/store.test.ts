@@ -268,4 +268,30 @@ describe('NutritionStore persistence and sync', () => {
     await expect(phone.sync()).rejects.toThrow(/401/);
     expect(phone.lastSyncError).toMatch(/401/);
   });
+
+  it('merges another snapshot (local-only data) as pending, newest row wins', async () => {
+    const localStorage = new MemoryStorage();
+    const local = new NutritionStore(localStorage, { now: () => 5_000 });
+    await local.init();
+    const e = local.logFood({ day: '2026-11-19', meal: 'lunch', food: rice, grams: 100 });
+    const gone = local.quickAdd({ day: '2026-11-19', meal: 'snack', nutrients: { [N.energy]: 100 } });
+    local.remove('diaryEntries', gone.id);
+    local.setSetting('prefs', { weightUnit: 'lb' });
+    await local.persist();
+
+    let t = 1_000;
+    const account = new NutritionStore(new MemoryStorage(), { now: () => t });
+    await account.init();
+    account.setSetting('prefs', { weightUnit: 'kg' }); // older than the local one
+    t = 9_000;
+    account.setSetting('profile', { sex: 'female' }); // newer than anything local
+    const before = account.all('settings').find((s) => s.id === 'profile');
+    expect(account.mergeSnapshot(localStorage.data!)).toBe(3); // food + entry + newer prefs; the deleted entry is skipped
+    expect(account.entriesOn('2026-11-19').map((x) => x.id)).toEqual([e.id]);
+    expect(account.prefs().weightUnit).toBe('lb');
+    expect(account.all('settings').find((s) => s.id === 'profile')).toEqual(before);
+    expect(account.isPending('diaryEntries', e.id)).toBe(true);
+    expect(account.all('foods').some((f) => f.id.startsWith('usda:'))).toBe(false);
+    expect(account.mergeSnapshot(localStorage.data!)).toBe(0); // idempotent
+  });
 });

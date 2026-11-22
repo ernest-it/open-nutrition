@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, useSyncExternalStore } 
 import { AppState } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import Storage from 'expo-sqlite/kv-store';
-import { NutritionStore, SETTING_PREFS, todayLocal, type CollectionName, type Prefs, type Snapshot, type StorageAdapter } from '@open-nutrition/shared';
+import { COLLECTION_NAMES, NutritionStore, SETTING_PREFS, todayLocal, type CollectionName, type Prefs, type Snapshot, type StorageAdapter } from '@open-nutrition/shared';
 
 /** Snapshot persisted in on-device SQLite (no size limit, unlike AsyncStorage on Android). */
 class SqliteKvStorage implements StorageAdapter {
@@ -61,10 +61,67 @@ function markFirstSync() {
   for (const l of firstSyncListeners) l();
 }
 
+const LOCAL_SNAPSHOT = 'snapshot:local';
+
+/** What local-only mode left on this phone (live rows only), or null when there is nothing worth moving. */
+export interface LocalDataSummary {
+  entries: number;
+  days: number;
+  measurements: number;
+  foods: number;
+  other: number;
+  total: number;
+}
+
+export async function localDataSummary(): Promise<LocalDataSummary | null> {
+  try {
+    const snap = await new SqliteKvStorage(LOCAL_SNAPSHOT).load();
+    if (!snap) return null;
+    const live = <T extends { deletedAt: number | null }>(rows: T[] | undefined) => (rows ?? []).filter((r) => !r.deletedAt);
+    const entries = live(snap.rows.diaryEntries);
+    const measurements = live(snap.rows.measurements).length;
+    const foods = live(snap.rows.foods).length;
+    const other = live(snap.rows.recipes).length + live(snap.rows.savedMeals).length + live(snap.rows.targets).length;
+    // Settings alone (units, AI switch) are not worth a prompt.
+    const total = entries.length + measurements + foods + other;
+    if (!total) return null;
+    return { entries: entries.length, days: new Set(entries.map((e) => e.date)).size, measurements, foods, other, total };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Copy this phone's local-only data into the signed-in account and upload it. The local copy
+ * is removed only once everything it contributed has reached the server, so nothing is lost
+ * if the upload fails (try again later from Settings).
+ */
+export async function moveLocalDataToAccount(): Promise<{ moved: number; uploaded: boolean }> {
+  const local = new SqliteKvStorage(LOCAL_SNAPSHOT);
+  const snap = await local.load();
+  if (!snap) return { moved: 0, uploaded: true };
+  const moved = store.mergeSnapshot(snap);
+  await store.persist();
+  try {
+    await store.sync();
+  } catch {
+    /* reported below */
+  }
+  const ids = COLLECTION_NAMES.flatMap((c) => (snap.rows[c] ?? []).map((r) => [c, r.id] as const));
+  const uploaded = !store.lastSyncError && !ids.some(([c, id]) => store.isPending(c, id));
+  if (uploaded) await local.clear();
+  return { moved, uploaded };
+}
+
+/** Forget local-only data without moving it. */
+export async function discardLocalData() {
+  await new SqliteKvStorage(LOCAL_SNAPSHOT).clear();
+}
+
 export async function initStore(account: Account) {
   cleanup?.();
   firstSyncDone = false;
-  const key = account.server ? `snapshot:${account.server.username}@${account.server.baseUrl}` : 'snapshot:local';
+  const key = account.server ? `snapshot:${account.server.username}@${account.server.baseUrl}` : LOCAL_SNAPSHOT;
   store = new NutritionStore(new SqliteKvStorage(key));
   await store.init();
   if (!account.server) {

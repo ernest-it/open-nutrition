@@ -7,7 +7,8 @@ import { FoodDbLoader } from './src/foods';
 import { Icon, Logo, type IconName } from './src/icons';
 import { useLayout } from './src/layout';
 import { NavContext, type AddOptions, type Nav, type Route, type Tab } from './src/nav';
-import { AccountContext, initStore, loadAccount, saveAccount, store, useFirstSyncDone, useStore, useToday, type Account } from './src/state';
+import { AccountContext, initStore, loadAccount, localDataSummary, saveAccount, store, useFirstSyncDone, useStore, useToday, type Account, type LocalDataSummary } from './src/state';
+import { MoveLocalDataScreen } from './src/localData';
 import { NUTRIENT_BY_KEY } from '@open-nutrition/shared';
 import { FeedbackProvider, ToastHost } from './src/feedback';
 import { Button, HeaderTitleContext, IconButton, T, haptic, useTheme } from './src/ui';
@@ -37,12 +38,20 @@ export default function App() {
 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // Set when a server account was just connected: local-only data is then offered for moving
+  // (before onboarding, so a fresh account does not ask for a profile the phone already has).
+  const justConnected = useRef(false);
+  const [offer, setOffer] = useState<LocalDataSummary | null>(null);
   useEffect(() => {
     if (!account) return;
     setReady(false);
     setLoadError(null);
     initStore(account)
-      .then(() => setReady(true))
+      .then(async () => {
+        if (justConnected.current && account.server) setOffer(await localDataSummary());
+        justConnected.current = false;
+        setReady(true);
+      })
       .catch((e: Error) => setLoadError(e.message || String(e)));
   }, [account, attempt]);
 
@@ -60,25 +69,32 @@ export default function App() {
             <ConnectScreen
               onDone={(a) => {
                 void saveAccount(a);
+                justConnected.current = !!a.server;
                 setAccount(a);
               }}
             />
           </ThemedSafeArea>
         ) : (
           <AccountContext.Provider value={account}>
-            <Main
-              onSignOut={async () => {
-                if (account.server) {
-                  await fetch(`${account.server.baseUrl}/api/v1/auth/logout`, {
-                    method: 'POST',
-                    headers: { authorization: `Bearer ${account.server.token}` },
-                  }).catch(() => {});
-                  await store.reset();
-                }
-                await saveAccount(null);
-                setAccount(null);
-              }}
-            />
+            {offer ? (
+              <ThemedSafeArea>
+                <MoveLocalDataScreen summary={offer} onDone={() => setOffer(null)} />
+              </ThemedSafeArea>
+            ) : (
+              <Main
+                onSignOut={async () => {
+                  if (account.server) {
+                    await fetch(`${account.server.baseUrl}/api/v1/auth/logout`, {
+                      method: 'POST',
+                      headers: { authorization: `Bearer ${account.server.token}` },
+                    }).catch(() => {});
+                    await store.reset();
+                  }
+                  await saveAccount(null);
+                  setAccount(null);
+                }}
+              />
+            )}
           </AccountContext.Provider>
         )}
       </FeedbackProvider>

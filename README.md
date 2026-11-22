@@ -57,7 +57,7 @@ docker compose up -d
 # open http://<host>:8080 and create your account
 ```
 
-Then install the app from the [latest release](https://github.com/ernest-it/open-nutrition/releases/latest) and enter `<host>:8080`, or your HTTPS domain if you expose it. Or skip the server and use the app in **local-only mode**: your data stays on the phone.
+Then install the app from the [latest release](https://github.com/ernest-it/open-nutrition/releases/latest) and enter `<host>:8080`, or your HTTPS domain if you expose it. Or skip the server and use the app in **local-only mode**: your data stays on the phone. If you set up a server later, sign in from Settings and the app offers to move your local data into your account.
 
 Prebuilt server images are at `ghcr.io/ernest-it/open-nutrition:latest` (amd64 and arm64).
 
