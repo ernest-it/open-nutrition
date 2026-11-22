@@ -198,3 +198,31 @@ describe('statusFor', () => {
     expect(daysForAverage(['2026-11-19'], '2026-11-19')).toEqual(['2026-11-19']);
   });
 });
+
+import { UNIT_SYSTEMS, fromFeetInches, proteinPerKg, proteinPerUnit, toFeetInches, unitSystemForLocale, unitSystemOf } from '../src';
+
+describe('unit systems', () => {
+  it('picks imperial only for US-style regions', () => {
+    expect(unitSystemForLocale('en-US')).toBe('imperial');
+    expect(unitSystemForLocale('es_US')).toBe('imperial');
+    expect(unitSystemForLocale('en-GB')).toBe('metric');
+    expect(unitSystemForLocale('en-CA')).toBe('metric');
+    expect(unitSystemForLocale('zh-Hans-CN')).toBe('metric');
+    expect(unitSystemForLocale('en')).toBe('metric');
+    expect(unitSystemForLocale(undefined)).toBe('metric');
+    expect(unitSystemOf(UNIT_SYSTEMS.imperial)).toBe('imperial');
+  });
+
+  it('converts feet and inches', () => {
+    expect(toFeetInches(180)).toEqual({ ft: 5, in: 10.9 });
+    expect(toFeetInches(fromFeetInches(6, 0))).toEqual({ ft: 6, in: 0 });
+    expect(toFeetInches(fromFeetInches(5, 11.96))).toEqual({ ft: 6, in: 0 });
+    expect(fromFeetInches(5, 10)).toBeCloseTo(177.8, 5);
+  });
+
+  it('converts protein per body weight', () => {
+    expect(proteinPerUnit(1.6, 'lb')).toBeCloseTo(0.726, 3);
+    expect(proteinPerKg(proteinPerUnit(1.6, 'lb'), 'lb')).toBeCloseTo(1.6, 9);
+    expect(proteinPerUnit(1.6, 'kg')).toBe(1.6);
+  });
+});

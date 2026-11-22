@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import {
   ACTIVITY_FACTORS,
@@ -9,11 +9,18 @@ import {
   computeTargets,
   driDefaults,
 
-  fromCm,
+  SETTING_PREFS,
+  UNIT_SYSTEMS,
+  fromFeetInches,
   fromKg,
+  proteinPerKg,
+  proteinPerUnit,
+  toFeetInches,
+  unitSystemForLocale,
+  unitSystemOf,
+  type UnitSystem,
   fromMl,
   toMl,
-  toCm,
   toKg,
   type ActivityLevel,
   type NutrientMap,
@@ -21,7 +28,7 @@ import {
   type Profile,
 } from '@open-nutrition/shared';
 import { useNav } from '../nav';
-import { usePrefs, useStore } from '../state';
+import { setPrefs, usePrefs, useStore } from '../state';
 import {
   Button,
   Card,
@@ -30,6 +37,7 @@ import {
   ListRow,
   Notice,
   NumField,
+  NumInput,
   Screen,
   Segmented,
   T,
@@ -102,20 +110,24 @@ export function ProfileForm({ submitLabel, onSaved }: { submitLabel: string; onS
   const existing = store.profile();
   const [p, setP] = useState<Profile>(existing ?? DEFAULT_PROFILE);
   const latestKg = store.latestWeightKg();
-  const [weight, setWeight] = useState<number | null>(latestKg != null ? +fromKg(latestKg, prefs.weightUnit).toFixed(1) : null);
-  const [height, setHeight] = useState<number | null>(+fromCm(p.heightCm, prefs.lengthUnit).toFixed(1));
+  // Kept in kg / cm so switching units only changes what is shown.
+  const [weightKgDraft, setWeightKgDraft] = useState<number | null>(latestKg);
+  const [heightCm, setHeightCm] = useState<number | null>(p.heightCm);
   const [splitKey, setSplitKey] = useState(() => SPLITS.find((x) => sameSplit(x.split, p.macroSplit))?.value ?? 'custom');
   const set = (patch: Partial<Profile>) => setP((cur) => ({ ...cur, ...patch }));
   const once = useOnce();
   const wu = prefs.weightUnit;
+  const system = unitSystemOf(prefs);
+  const imperialHeight = prefs.lengthUnit === 'in';
+  const feetInches = heightCm != null ? toFeetInches(heightCm) : null;
 
-  const weightKg = weight != null && weight > 0 ? toKg(weight, wu) : null;
-  const heightOk = height != null && height > 0;
+  const weightKg = weightKgDraft != null && weightKgDraft > 0 ? weightKgDraft : null;
+  const heightOk = heightCm != null && heightCm >= 50 && heightCm <= 280;
   const year = new Date().getFullYear();
   const yearOk = p.birthYear >= year - 110 && p.birthYear <= year - 13;
   const splitSum = p.macroSplit.protein + p.macroSplit.carbs + p.macroSplit.fat;
   const valid = weightKg != null && heightOk && yearOk && Math.abs(splitSum - 100) < 0.5;
-  const full: Profile = { ...p, heightCm: heightOk ? toCm(height!, prefs.lengthUnit) : p.heightCm };
+  const full: Profile = { ...p, heightCm: heightOk ? heightCm! : p.heightCm };
   const preview = valid ? computeTargets(full, weightKg!) : null;
 
   const rates = wu === 'kg' ? [-0.75, -0.5, -0.25, 0, 0.25, 0.5] : [-1.5, -1, -0.5, 0, 0.5, 1];
@@ -125,6 +137,17 @@ export function ProfileForm({ submitLabel, onSaved }: { submitLabel: string; onS
     <View>
       <Card>
         <T small muted>
+          Units
+        </T>
+        <Segmented<UnitSystem>
+          options={[
+            { value: 'metric', label: 'Metric (kg, cm)' },
+            { value: 'imperial', label: 'Imperial (lb, ft)' },
+          ]}
+          value={system}
+          onChange={(v) => setPrefs(UNIT_SYSTEMS[v])}
+        />
+        <T small muted style={{ marginTop: 10 }}>
           Sex (for the energy equation and nutrient references)
         </T>
         <Segmented
@@ -141,8 +164,39 @@ export function ProfileForm({ submitLabel, onSaved }: { submitLabel: string; onS
             Enter a year between {year - 110} and {year - 13}.
           </T>
         )}
-        <NumField label="Height" unit={prefs.lengthUnit} value={height} onChange={setHeight} />
-        <NumField label="Current weight" unit={wu} value={weight} onChange={setWeight} />
+        {imperialHeight ? (
+          <View style={[styles.row, { minHeight: 48 }]}>
+            <T style={{ flex: 1 }}>Height</T>
+            <NumInput
+              value={feetInches?.ft ?? null}
+              onChange={(v) => setHeightCm(v == null && !feetInches?.in ? null : fromFeetInches(v ?? 0, feetInches?.in ?? 0))}
+              accessibilityLabel="Height, feet"
+              integer
+              style={{ width: 56 }}
+            />
+            <T muted>ft</T>
+            <NumInput
+              value={feetInches?.in ?? null}
+              onChange={(v) => setHeightCm(fromFeetInches(feetInches?.ft ?? 0, Math.min(v ?? 0, 11.9)))}
+              accessibilityLabel="Height, inches"
+              style={{ width: 64 }}
+            />
+            <T muted>in</T>
+          </View>
+        ) : (
+          <NumField label="Height" unit="cm" value={heightCm != null ? +heightCm.toFixed(1) : null} onChange={setHeightCm} />
+        )}
+        {heightCm != null && !heightOk && (
+          <T small color={t.warn}>
+            Check your height.
+          </T>
+        )}
+        <NumField
+          label="Current weight"
+          unit={wu}
+          value={weightKgDraft != null ? +fromKg(weightKgDraft, wu).toFixed(1) : null}
+          onChange={(v) => setWeightKgDraft(v != null ? toKg(v, wu) : null)}
+        />
       </Card>
       <H2>Activity</H2>
       <Card style={{ paddingVertical: 4 }}>
@@ -171,7 +225,7 @@ export function ProfileForm({ submitLabel, onSaved }: { submitLabel: string; onS
           onChange={(v) => set({ goalKgPerWeek: toKg(Number(v), wu) })}
         />
         <NumField label="Custom rate" unit={`${wu}/wk`} value={Number(rateValue)} onChange={(v) => set({ goalKgPerWeek: toKg(v ?? 0, wu) })} />
-        {Math.abs(p.goalKgPerWeek) > 1 && <Notice tone="warn">More than 1 kg a week is faster than most guidelines recommend.</Notice>}
+        {Math.abs(p.goalKgPerWeek) > 1 && <Notice tone="warn">{`More than ${wu === 'kg' ? '1 kg' : '2.2 lb'} a week is faster than most guidelines recommend.`}</Notice>}
       </Card>
       <H2>Macros</H2>
       <Card>
@@ -182,7 +236,12 @@ export function ProfileForm({ submitLabel, onSaved }: { submitLabel: string; onS
           onChange={(v) => set({ proteinGPerKg: v ? 1.6 : null })}
         />
         {p.proteinGPerKg != null && (
-          <NumField label="Protein per kg of body weight" unit="g/kg" value={p.proteinGPerKg} onChange={(v) => set({ proteinGPerKg: v ?? 0 })} />
+          <NumField
+            label={`Protein per ${wu} of body weight`}
+            unit={`g/${wu}`}
+            value={+proteinPerUnit(p.proteinGPerKg, wu).toFixed(2)}
+            onChange={(v) => set({ proteinGPerKg: proteinPerKg(v ?? 0, wu) })}
+          />
         )}
         <T small muted style={{ marginTop: 6 }}>
           Split of calories (protein / carbs / fat, %)
@@ -247,6 +306,17 @@ const sameSplit = (a: Profile['macroSplit'], b: Profile['macroSplit']) => a.prot
 
 export function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const store = useStore();
+  // First run: start in the units people use where the phone is set up (US → lb, ft/in, fl oz).
+  useEffect(() => {
+    if (store.getSetting(SETTING_PREFS, null) != null) return;
+    let locale: string | undefined;
+    try {
+      locale = Intl.DateTimeFormat().resolvedOptions().locale;
+    } catch {
+      /* no Intl: stay metric */
+    }
+    if (unitSystemForLocale(locale) === 'imperial') setPrefs(UNIT_SYSTEMS.imperial);
+  }, [store]);
   return (
     <Screen title="Welcome">
       <T>Let’s set your daily calorie, macro and nutrient targets. It takes a minute, and everything stays editable.</T>

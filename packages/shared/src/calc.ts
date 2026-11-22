@@ -120,6 +120,34 @@ export const fromCm = (cm: number, unit: LengthUnit) => (unit === 'cm' ? cm : cm
 export const toMl = (v: number, unit: WaterUnit) => (unit === 'ml' ? v : v * ML_PER_FLOZ);
 export const fromMl = (ml: number, unit: WaterUnit) => (unit === 'ml' ? ml : ml / ML_PER_FLOZ);
 
+/** One switch for all body units (weight, length, water); Settings can still mix them. */
+export type UnitSystem = 'metric' | 'imperial';
+export const UNIT_SYSTEMS: Record<UnitSystem, { weightUnit: WeightUnit; lengthUnit: LengthUnit; waterUnit: WaterUnit }> = {
+  metric: { weightUnit: 'kg', lengthUnit: 'cm', waterUnit: 'ml' },
+  imperial: { weightUnit: 'lb', lengthUnit: 'in', waterUnit: 'floz' },
+};
+export const unitSystemOf = (p: { weightUnit: WeightUnit }): UnitSystem => (p.weightUnit === 'lb' ? 'imperial' : 'metric');
+
+/** Countries that weigh people in pounds and measure them in feet and inches. */
+const IMPERIAL_REGIONS = new Set(['US', 'LR', 'MM']);
+/** Sensible first-run units for a BCP 47 locale such as "en-US" (metric when unknown). */
+export function unitSystemForLocale(locale: string | null | undefined): UnitSystem {
+  const region = /[-_]([A-Za-z]{2})(?:[-_@]|$)/.exec(locale ?? '')?.[1]?.toUpperCase();
+  return region && IMPERIAL_REGIONS.has(region) ? 'imperial' : 'metric';
+}
+
+/** 180 cm → { ft: 5, in: 10.9 } (inches to one decimal, never 12). */
+export function toFeetInches(cm: number): { ft: number; in: number } {
+  const total = +(cm / CM_PER_IN).toFixed(1);
+  const ft = Math.floor(total / 12);
+  return { ft, in: +(total - ft * 12).toFixed(1) };
+}
+export const fromFeetInches = (ft: number, inches: number) => (ft * 12 + inches) * CM_PER_IN;
+
+/** Protein in g per kg of body weight ↔ g per lb. */
+export const proteinPerUnit = (gPerKg: number, unit: WeightUnit) => (unit === 'kg' ? gPerKg : gPerKg * KG_PER_LB);
+export const proteinPerKg = (v: number, unit: WeightUnit) => (unit === 'kg' ? v : v / KG_PER_LB);
+
 const trim = (v: number, digits: number) => `${+v.toFixed(digits)}`;
 
 /** "80.5" (no unit suffix; callers add the unit label). */

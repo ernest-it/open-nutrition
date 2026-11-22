@@ -540,6 +540,8 @@ svg.chart .trend-dot { fill: var(--accent); stroke: var(--surface); stroke-width
 .settings-section h3 { margin-top: 1.25rem; }
 .split-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.4rem; align-self: end; }
 .split-inputs legend { grid-column: 1 / -1; }
+.height-ft-in { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; align-items: center; gap: 0 0.4rem; align-self: end; border: 0; padding: 0; margin: 0.5rem 0; min-width: 0; }
+.height-ft-in legend { grid-column: 1 / -1; }
 .form-grid > .form-note { grid-column: 1 / -1; display: block; margin: -0.2rem 0 0.5rem; }
 @media (max-width: 599px) { .form-grid > .split-inputs { grid-column: 1 / -1; } .form-grid > label:has(+ .split-inputs) { grid-column: 1 / -1; } }
 .unit-rows { display: grid; gap: 0.5rem; }

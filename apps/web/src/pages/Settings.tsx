@@ -8,7 +8,14 @@ import {
   CORE_NUTRIENTS,
   diaryToCsv,
   formatWeight,
+  UNIT_SYSTEMS,
   fromCm,
+  fromFeetInches,
+  proteinPerKg,
+  proteinPerUnit,
+  toFeetInches,
+  unitSystemOf,
+  type UnitSystem,
   fromKg,
   fromMl,
   N,
@@ -84,6 +91,8 @@ const ACTIVITY_LABEL: Record<ActivityLevel, string> = {
 };
 
 const GOAL_RATES_KG = [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5];
+/** Round pound rates for imperial users (stored in kg). */
+const GOAL_RATES_LB = [-2, -1.5, -1, -0.5, 0, 0.5, 1];
 
 const DEFAULT_PROFILE: Profile = {
   sex: 'female',
@@ -162,6 +171,13 @@ function TargetsSection() {
         Dietary Reference Intakes for your age and sex. Every number is yours to change.
       </p>
       <div className="form-grid">
+        <label className="span-2">
+          Units
+          <select value={unitSystemOf(prefs)} onChange={(e) => setPrefs(UNIT_SYSTEMS[e.target.value as UnitSystem])}>
+            <option value="metric">Metric (kg, cm, ml)</option>
+            <option value="imperial">Imperial (lb, ft and in, fl oz)</option>
+          </select>
+        </label>
         <label>
           Sex (for the energy equation)
           <select value={p.sex} onChange={(e) => setP({ ...p, sex: e.target.value as Profile['sex'] })}>
@@ -173,10 +189,28 @@ function TargetsSection() {
           Birth year
           <NumberInput value={p.birthYear} onChange={(v) => v && setP({ ...p, birthYear: Math.round(v) })} />
         </label>
-        <label>
-          Height ({lu})
-          <NumberInput value={+fromCm(p.heightCm, lu).toFixed(1)} onChange={(v) => v && setP({ ...p, heightCm: toCm(v, lu) })} />
-        </label>
+        {lu === 'in' ? (
+          <fieldset className="height-ft-in">
+            <legend>Height</legend>
+            <NumberInput
+              value={toFeetInches(p.heightCm).ft}
+              ariaLabel="Height, feet"
+              onChange={(v) => v != null && setP({ ...p, heightCm: fromFeetInches(v, toFeetInches(p.heightCm).in) })}
+            />
+            <span className="muted">ft</span>
+            <NumberInput
+              value={toFeetInches(p.heightCm).in}
+              ariaLabel="Height, inches"
+              onChange={(v) => setP({ ...p, heightCm: fromFeetInches(toFeetInches(p.heightCm).ft, Math.min(v ?? 0, 11.9)) })}
+            />
+            <span className="muted">in</span>
+          </fieldset>
+        ) : (
+          <label>
+            Height (cm)
+            <NumberInput value={+fromCm(p.heightCm, lu).toFixed(1)} onChange={(v) => v && setP({ ...p, heightCm: toCm(v, lu) })} />
+          </label>
+        )}
         <label>
           Current weight ({wu})
           <NumberInput value={weightKg != null ? +fromKg(weightKg, wu).toFixed(1) : null} onChange={(v) => setWeightKg(v ? toKg(v, wu) : null)} />
@@ -194,7 +228,7 @@ function TargetsSection() {
         <label className="span-2">
           Goal
           <select value={p.goalKgPerWeek} onChange={(e) => setP({ ...p, goalKgPerWeek: Number(e.target.value) })}>
-            {[...new Set([...GOAL_RATES_KG, p.goalKgPerWeek])].sort((a, b) => a - b).map((r) => (
+            {[...new Set([...(wu === 'kg' ? GOAL_RATES_KG : GOAL_RATES_LB.map((r) => +toKg(r, wu).toFixed(6))), p.goalKgPerWeek])].sort((a, b) => a - b).map((r) => (
               <option key={r} value={r}>
                 {r === 0 ? 'Maintain weight' : `${r < 0 ? "Lose" : "Gain"} ${fmt(fromKg(Math.abs(r), wu), 2)} ${wu} per week`}
               </option>
@@ -202,8 +236,12 @@ function TargetsSection() {
           </select>
         </label>
         <label>
-          Protein (g per kg body weight, optional)
-          <NumberInput value={p.proteinGPerKg} onChange={(v) => setP({ ...p, proteinGPerKg: v && v > 0 ? v : null })} placeholder="e.g. 1.6" />
+          Protein (g per {wu} body weight, optional)
+          <NumberInput
+            value={p.proteinGPerKg != null ? +proteinPerUnit(p.proteinGPerKg, wu).toFixed(2) : null}
+            onChange={(v) => setP({ ...p, proteinGPerKg: v && v > 0 ? proteinPerKg(v, wu) : null })}
+            placeholder={wu === 'kg' ? 'e.g. 1.6' : 'e.g. 0.7'}
+          />
         </label>
         <fieldset className="split-inputs">
           <legend>Calories from protein / carbs / fat (%)</legend>
@@ -218,7 +256,7 @@ function TargetsSection() {
         </fieldset>
         {/* Help sits under the whole row so the g/kg input and the % inputs line up. */}
         <small className={`form-note ${splitSum === 100 || p.proteinGPerKg != null ? 'muted' : 'error'}`}>
-          {p.proteinGPerKg != null ? 'Protein set by g/kg; carbs and fat share the rest in this ratio.' : `Macro split total ${splitSum}% (must be 100)`}
+          {p.proteinGPerKg != null ? `Protein set by g/${wu}; carbs and fat share the rest in this ratio.` : `Macro split total ${splitSum}% (must be 100)`}
         </small>
       </div>
       {canCalc && (
