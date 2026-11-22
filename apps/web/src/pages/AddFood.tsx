@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { isValidBarcode, kcalFromMacros, N, OFF_ATTRIBUTION, sumNutrients, type Food, type FoodData, type Meal, type NutrientMap } from '@open-nutrition/shared';
 import type { AddRequest, AddTab } from '../addFood';
 import { errorMessage, removeRows, restoreRows, useLoggedDays, usePrefs, useStore, store } from '../state';
+import { MenuImportDialog, useAiAvailable } from './MenuImport';
 import { getAiStatus, lookupBarcode, brandedSearchAvailable, searchBranded, searchFoods, searchLocalFoods, type AiStatus, type BarcodeSource } from '../foodApi';
 import { FoodPortion, FoodRow, MacroInputs, NutrientSummary, plural } from '../components';
 import { InlineError, Spinner, useConfirm, useToast } from '../feedback';
@@ -115,6 +116,8 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Food | FoodData | null>(null);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const aiOn = useAiAvailable();
   /** Packaged foods from USDA via the server; null = not available on this server. */
   const [branded, setBranded] = useState<{ q: string; foods: Food[] | null; error: string | null } | null>(null);
 
@@ -282,6 +285,12 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
       <button type="button" className="link pad-y" onClick={() => setCreating(true)}>
         <Icon name="plus" size={18} /> Create a custom food
       </button>
+      {aiOn && (
+        <button type="button" className="link pad-y" onClick={() => setImporting(true)}>
+          <Icon name="bowl" size={18} /> Import from a restaurant’s nutrition page
+        </button>
+      )}
+      {importing && <MenuImportDialog onClose={() => setImporting(false)} />}
       {creating && (
         <FoodEditor
           initial={text ? { name: text } : undefined}

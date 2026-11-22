@@ -57,6 +57,16 @@ Rules the app follows:
 - Photos are resized on the phone and are not synced; only a hash is kept in `aiEstimates`.
 - Anthropic's own data-use terms apply to what is sent through your key.
 
+## Import from a restaurant's nutrition page
+
+Foods → **Import from a restaurant** (web: also in Add food). The user pastes the address of a restaurant's own nutrition page or nutrition PDF, or pastes the page's text. Claude transcribes the menu items (name, serving, serving weight, and per-serving calories, fat, saturated fat, sodium, carbohydrates, fibre, sugars, added sugars and protein as printed) and the user ticks which ones to save. Saved items become ordinary custom foods with the restaurant as the brand; nothing else is stored.
+
+- **Same availability as AI logging:** signed in to a server with AI set up (the server fetches the page and calls Claude; one request counts against `AI_MONTHLY_LIMIT`), or local-only mode with your own key (the phone fetches the page and calls Anthropic directly).
+- **Transcription, not estimation:** the prompt (`MENU_IMPORT_SYSTEM_PROMPT` in `packages/shared/src/menuImport.ts`) says to copy printed values and use null for anything not listed. The only estimated value is a serving's weight when the page gives none; such servings are labelled "(weight estimated)".
+- **One page, on request:** each import is a single read of one page the user chose, for that user only. Nothing is crawled, cached or shared between users, and no restaurant data ships with the app.
+- **Server safety:** the server only opens public http(s) addresses on ports 80/443. Every resolved IP must be public, checked inside the socket's own DNS lookup (so DNS rebinding cannot reach the LAN, localhost or cloud metadata), and redirects are re-checked (`apps/server/src/pageFetch.ts`). Pages are limited to 20 MB and 15 s.
+- **Limits:** pages that render their menu with JavaScript have almost no text in their HTML. The app says so and asks for the PDF link or pasted text. Very long pages (over 400,000 characters) must be pasted in parts. The answer is streamed on the server, so large menus do not time out.
+
 ## Evaluation plan
 
 Before trusting any model or effort setting, build a small eval set:

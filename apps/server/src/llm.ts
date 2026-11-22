@@ -16,11 +16,15 @@ import {
   AiError,
   aiErrorFromHttp,
   buildMealEstimateRequest,
+  buildMenuImportRequest,
   estimateCostUsd,
   mealEstimateBetas,
   parseMealEstimateResponse,
+  parseMenuImportResponse,
   type AiEffort,
   type MealEstimate,
+  type MenuImport,
+  type MenuPage,
 } from '@open-nutrition/shared';
 import type { Config } from './config';
 
@@ -43,8 +47,18 @@ export interface EstimateOutput {
   costUsd: number;
 }
 
+export interface MenuOutput {
+  menu: MenuImport;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}
+
 export interface MealEstimator {
   estimate(input: EstimateInput): Promise<EstimateOutput>;
+  /** Transcribe a restaurant nutrition page (import from a nutrition page). */
+  readMenu(input: { page: MenuPage; model: string; effort: AiEffort }): Promise<MenuOutput>;
 }
 
 export class AnthropicMealEstimator implements MealEstimator {
@@ -67,6 +81,23 @@ export class AnthropicMealEstimator implements MealEstimator {
       writeTokens: r.cacheCreationInputTokens,
     });
     return { estimate: r.estimate, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens, costUsd };
+  }
+
+  async readMenu(input: { page: MenuPage; model: string; effort: AiEffort }): Promise<MenuOutput> {
+    const body = buildMenuImportRequest(input);
+    const betas = mealEstimateBetas(body);
+    let msg: unknown;
+    try {
+      // Streamed: a whole menu can be a long answer (avoids HTTP timeouts on big max_tokens).
+      msg = betas.length
+        ? await this.client.beta.messages.stream({ ...body, betas } as unknown as Anthropic.Beta.MessageCreateParamsStreaming, { timeout: 600_000 }).finalMessage()
+        : await this.client.messages.stream(body as unknown as Anthropic.MessageCreateParamsStreaming, { timeout: 600_000 }).finalMessage();
+    } catch (e) {
+      throw toAiError(e);
+    }
+    const r = parseMenuImportResponse(msg);
+    const costUsd = estimateCostUsd(r.model, r.inputTokens, r.outputTokens, { readTokens: r.cacheReadInputTokens, writeTokens: r.cacheCreationInputTokens });
+    return { menu: r.menu, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens, costUsd };
   }
 }
 

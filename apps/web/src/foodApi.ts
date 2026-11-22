@@ -1,4 +1,4 @@
-import type { AiEffort, Food, FoodData, MealEstimate } from '@open-nutrition/shared';
+import type { AiEffort, Food, FoodData, MealEstimate, MenuImport } from '@open-nutrition/shared';
 import { api, ApiError, store } from './state';
 
 /** Bundled USDA search on the server (`usda:` builtin ids). */
@@ -151,5 +151,23 @@ export async function sha256Base64(base64: string): Promise<string | null> {
     return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
   } catch {
     return null;
+  }
+}
+
+export interface MenuImportResponse {
+  menu: MenuImport;
+  model: string;
+  costUsd: number;
+}
+
+/** Import from a nutrition page (the server fetches the link, or uses pasted text). */
+export async function importMenu(body: { url?: string; text?: string }): Promise<MenuImportResponse> {
+  try {
+    const r = await api<MenuImportResponse>('/api/v1/ai/menu-import', { method: 'POST', body: JSON.stringify(body) });
+    aiStatusCache = null;
+    return r;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 503) throw new Error('AI is not set up on this server. Ask the server admin to add an API key.');
+    throw e;
   }
 }

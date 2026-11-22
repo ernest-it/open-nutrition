@@ -11,6 +11,7 @@ Open Nutrition tracks calories, macros, micronutrients, weight and water, with n
 - 🐳 **One container, one SQLite file.** Runs on Docker Compose, Kubernetes, or a Proxmox LXC.
 - 🥦 **Bundled USDA food database** for offline search with full micronutrient data, plus **barcode scanning** against Open Food Facts.
 - ✨ **AI meal logging (optional).** Take a photo and/or describe a meal, and Claude estimates what is on the plate. You review the estimate before anything is saved. Off until you turn it on.
+- 🍔 **Restaurant menus (optional, uses AI).** Paste a link to a restaurant's own nutrition page or PDF (or its text); Claude lists the items with the published numbers and you pick which to save as foods.
 
 ## Screenshots
 

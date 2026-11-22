@@ -2,11 +2,12 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { AI_MODELS, AiError } from '@open-nutrition/shared';
+import { AI_MODELS, AiError, MAX_MENU_TEXT_CHARS, checkText, pageFromBytes, type MenuPage } from '@open-nutrition/shared';
 import { RateLimiter } from './auth';
 import type { Config } from './config';
 import type { DB } from './db';
 import { aiErrorStatus, toAiError, type MealEstimator } from './llm';
+import { PageFetchError, fetchPublicPage } from './pageFetch';
 
 export const AI_BODY_LIMIT = 8 * 1024 * 1024;
 const MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -19,6 +20,20 @@ const estimateBody = z.object({
   effort: z.enum(['low', 'medium', 'high']).nullish(),
 });
 
+const menuBody = z.object({
+  /** A restaurant's nutrition page or PDF (fetched by the server). */
+  url: z.string().max(2000).nullish(),
+  /** Or the page's text, pasted by the user. */
+  text: z.string().max(MAX_MENU_TEXT_CHARS + 1000).nullish(),
+  model: z.string().max(100).nullish(),
+  effort: z.enum(['low', 'medium', 'high']).nullish(),
+});
+
+export interface AiRouteDeps {
+  /** Page fetcher (tests inject a fake). */
+  fetchPage?: typeof fetchPublicPage;
+}
+
 /** Detect the image type from its first bytes (base64). */
 export function sniffImageType(b64: string): (typeof MEDIA_TYPES)[number] | null {
   const head = b64.replace(/^data:[^,]*,/, '').trimStart().slice(0, 16);
@@ -30,7 +45,7 @@ export function sniffImageType(b64: string): (typeof MEDIA_TYPES)[number] | null
 
 const month = (ms: number) => new Date(ms).toISOString().slice(0, 7);
 
-export interface AiDeps {
+export interface AiDeps extends AiRouteDeps {
   db: DB;
   config: Config;
   estimator: MealEstimator | null;
@@ -110,6 +125,52 @@ export function registerAiRoutes(r: FastifyInstance, deps: AiDeps) {
       // Nothing was generated (or billed) for these: give the slot back.
       if (['no_input', 'auth', 'rate_limit', 'overloaded', 'api_error', 'not_configured'].includes(err.code)) refund(userId, m);
       deps.log.warn({ code: err.code, model, ms: Date.now() - started }, 'ai estimate failed');
+      return fail(err);
+    }
+  });
+
+  /**
+   * Import from a nutrition page: the user gives a restaurant's nutrition page (URL) or pastes
+   * its text; Claude transcribes the menu items. One user-initiated read; nothing is cached or
+   * shared between users. Counts as one AI use against the monthly cap.
+   */
+  r.post('/api/v1/ai/menu-import', { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) => {
+    const fail = (e: AiError) => reply.code(aiErrorStatus(e.code)).send({ error: e.message, code: e.code });
+    if (!estimator) return fail(new AiError('not_configured', 'AI features are not enabled on this server.'));
+    const parsed = menuBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'validation', code: 'validation', issues: parsed.error.issues });
+    const b = parsed.data;
+    const model = b.model || config.ai.model;
+    if (!allowedModels.has(model)) return reply.code(400).send({ error: `unknown model: ${model}`, code: 'validation' });
+    const userId = req.user!.id;
+    if (!burst.allow(userId)) return fail(new AiError('rate_limit', 'Too many AI requests. Try again later.'));
+
+    // Read the page first: a link that cannot be opened costs nothing.
+    let page: MenuPage;
+    try {
+      if (b.text?.trim()) page = checkText(b.text, b.url?.trim() || null);
+      else if (b.url?.trim()) {
+        const fetched = await (deps.fetchPage ?? fetchPublicPage)(b.url);
+        page = pageFromBytes(fetched.bytes, fetched.contentType, fetched.finalUrl);
+      } else return fail(new AiError('no_input', 'Paste a link to the restaurant’s nutrition page, or its text.'));
+    } catch (e) {
+      if (e instanceof PageFetchError) return reply.code(422).send({ error: e.message, code: 'page' });
+      if (e instanceof AiError) return fail(e);
+      throw e;
+    }
+
+    const m = month(now());
+    if (!reserve.immediate(userId, m)) return fail(new AiError('limit_reached', `You have used all ${limit} AI requests for this month.`));
+    const started = Date.now();
+    try {
+      const out = await estimator.readMenu({ page, model, effort: b.effort ?? config.ai.effort });
+      record(userId, m, out);
+      deps.log.info({ model: out.model, items: out.menu.items.length, inputTokens: out.inputTokens, outputTokens: out.outputTokens, ms: Date.now() - started }, 'ai menu import');
+      return out;
+    } catch (e) {
+      const err = toAiError(e);
+      if (['no_input', 'auth', 'rate_limit', 'overloaded', 'api_error', 'not_configured'].includes(err.code)) refund(userId, m);
+      deps.log.warn({ code: err.code, model, ms: Date.now() - started }, 'ai menu import failed');
       return fail(err);
     }
   });

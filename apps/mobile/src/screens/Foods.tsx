@@ -83,7 +83,10 @@ export function FoodsScreen() {
             {tab === 'recipes' ? (
               <Button small icon="plus" title="New recipe" variant="primary" onPress={newRecipe} />
             ) : tab === 'mine' ? (
-              <Button small icon="plus" title="New food" variant="primary" onPress={newFood} />
+              <View style={[styles.row, { gap: 6 }]}>
+                <Button small icon="sparkle" title={tiny ? 'Import' : 'Restaurant'} accessibilityLabel="Import from a restaurant's nutrition page" onPress={() => nav.push({ name: 'menuImport' })} />
+                <Button small icon="plus" title="New food" variant="primary" onPress={newFood} />
+              </View>
             ) : null}
           </View>
         }

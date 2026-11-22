@@ -4,6 +4,7 @@ import { restoreRows, store, useStore } from '../state';
 import { SOURCE_LABEL, servingOption } from '../components';
 import { InlineError, useConfirm, useToast } from '../feedback';
 import { Empty, Icon, kcal, Modal, NumberInput, Segmented } from '../ui';
+import { MenuImportDialog, useAiAvailable } from './MenuImport';
 
 type View = 'custom' | 'favorites' | 'all';
 
@@ -13,6 +14,8 @@ export function FoodsPage() {
   const [view, setView] = useState<View>('all');
   const [q, setQ] = useState('');
   const [editing, setEditing] = useState<Food | 'new' | null>(null);
+  const [importing, setImporting] = useState(false);
+  const aiOn = useAiAvailable();
   const all = s.all('foods').sort((a, b) => a.name.localeCompare(b.name));
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const list = all
@@ -23,10 +26,14 @@ export function FoodsPage() {
     <div className="page">
       <header className="page-head">
         <h1>Foods</h1>
-        <button className="primary" onClick={() => setEditing('new')}>
-          <Icon name="plus" size={18} /> New food
-        </button>
+        <div className="row" style={{ gap: '0.5rem', flexWrap: 'wrap' }}>
+          {aiOn && <button onClick={() => setImporting(true)}>Import from a restaurant</button>}
+          <button className="primary" onClick={() => setEditing('new')}>
+            <Icon name="plus" size={18} /> New food
+          </button>
+        </div>
       </header>
+      {importing && <MenuImportDialog onClose={() => setImporting(false)} />}
       <div className="toolbar">
         <Segmented
           value={view}

@@ -14,7 +14,13 @@ import {
   aiErrorFromHttp,
   anthropicHeaders,
   buildMealEstimateRequest,
+  buildMenuImportRequest,
+  checkText,
   estimateCostUsd,
+  pageFromBytes,
+  parseMenuImportResponse,
+  MenuImport,
+  MAX_MENU_PDF_BYTES,
   parseMealEstimateResponse,
   MealEstimate,
   type AiEffort,
@@ -183,6 +189,84 @@ async function direct(input: EstimateInput, signal: AbortSignal): Promise<Estima
       readTokens: r.cacheReadInputTokens,
       writeTokens: r.cacheCreationInputTokens,
     }),
+  };
+}
+
+// ---- import from a nutrition page ---------------------------------------------------------------
+
+export interface MenuImportResult {
+  menu: MenuImport;
+  model: string;
+  costUsd: number | null;
+}
+
+const MENU_TIMEOUT_MS = 300_000;
+
+/**
+ * Read a restaurant's nutrition page (link or pasted text) with Claude. Server mode: the server
+ * fetches the page and calls Claude. Local mode: the phone fetches the page itself and calls
+ * Anthropic with the user's own key.
+ */
+export async function requestMenuImport(account: Account, input: { url?: string; text?: string; model: string; effort: AiEffort }): Promise<MenuImportResult> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), MENU_TIMEOUT_MS);
+  try {
+    return account.server ? await menuViaServer(account, input, ctrl.signal) : await menuDirect(input, ctrl.signal);
+  } catch (e) {
+    if (e instanceof AiError) throw e;
+    if ((e as Error).name === 'AbortError') throw new AiError('api_error', 'Reading the page took too long. Try pasting just the part you need.');
+    throw new AiError('api_error', `Could not read the page: ${(e as Error).message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function menuViaServer(account: Account, input: { url?: string; text?: string; model: string; effort: AiEffort }, signal: AbortSignal): Promise<MenuImportResult> {
+  const res = await serverFetch(account, '/api/v1/ai/menu-import', {
+    method: 'POST',
+    body: JSON.stringify({ url: input.url || undefined, text: input.text || undefined, model: input.model, effort: input.effort }),
+    signal,
+  });
+  let body: Record<string, unknown> = {};
+  try {
+    body = (await res.json()) as Record<string, unknown>;
+  } catch {
+    /* not JSON */
+  }
+  if (!res.ok) {
+    const msg = typeof body.error === 'string' ? body.error : null;
+    if (res.status === 401) throw new AiError('auth', 'Your session has expired. Sign in again.');
+    if (res.status === 503) throw new AiError('not_configured', msg ?? 'AI is not set up on your server.');
+    throw new AiError(typeof body.code === 'string' && body.code !== 'page' ? (body.code as AiErrorCode) : 'no_input', msg ?? `The import failed (HTTP ${res.status}).`);
+  }
+  const parsed = MenuImport.safeParse(body.menu);
+  if (!parsed.success) throw new AiError('invalid_response', 'The server returned an unexpected answer. Please try again.');
+  return { menu: parsed.data, model: String(body.model ?? input.model), costUsd: typeof body.costUsd === 'number' ? body.costUsd : null };
+}
+
+async function menuDirect(input: { url?: string; text?: string; model: string; effort: AiEffort }, signal: AbortSignal): Promise<MenuImportResult> {
+  const key = await getApiKey();
+  if (!key) throw new AiError('not_configured', 'Add your Anthropic API key in Settings → AI first.');
+  let page;
+  if (input.text?.trim()) page = checkText(input.text, input.url ?? null);
+  else {
+    const url = input.url?.trim() ?? '';
+    if (!/^https?:\/\//i.test(url)) throw new AiError('no_input', 'Paste a link that starts with https://');
+    const res = await fetch(url, { headers: { Accept: 'text/html,application/pdf,text/plain;q=0.9,*/*;q=0.5' }, signal });
+    if (!res.ok) throw new AiError('no_input', res.status === 403 || res.status === 401 ? 'That site refused the request. Copy the nutrition table and paste it instead.' : `That page answered with HTTP ${res.status}.`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length > MAX_MENU_PDF_BYTES) throw new AiError('no_input', 'That page is too large to import.');
+    page = pageFromBytes(bytes, res.headers.get('content-type'), url);
+  }
+  // Non-streaming over fetch: a smaller output cap keeps one call reasonable on a phone.
+  const body = buildMenuImportRequest({ page, model: input.model, effort: input.effort, maxTokens: 32000 });
+  const res = await fetch(ANTHROPIC_MESSAGES_URL, { method: 'POST', headers: anthropicHeaders(key, body, { browser: true }), body: JSON.stringify(body), signal });
+  if (!res.ok) throw aiErrorFromHttp(res.status, await res.text());
+  const r = parseMenuImportResponse(await res.json());
+  return {
+    menu: r.menu,
+    model: r.model || input.model,
+    costUsd: estimateCostUsd(r.model || input.model, r.inputTokens, r.outputTokens, { readTokens: r.cacheReadInputTokens, writeTokens: r.cacheCreationInputTokens }),
   };
 }
 

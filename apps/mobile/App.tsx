@@ -22,6 +22,7 @@ import { BodyScreen } from './src/screens/Body';
 import { FoodEditScreen, FoodsScreen, RecipeEditScreen, SavedMealScreen } from './src/screens/Foods';
 import { MoreScreen, SettingsScreen } from './src/screens/Settings';
 import { OnboardingScreen, ProfileScreen, TargetsScreen } from './src/screens/Profile';
+import { MenuImportScreen } from './src/screens/MenuImport';
 
 export default function App() {
   // Paint the native root view in the theme background: no light flash behind modals or the keyboard in dark mode.
@@ -197,6 +198,8 @@ function titleOf(route: Route): string {
       return 'Targets';
     case 'profile':
       return 'Profile';
+    case 'menuImport':
+      return 'Import from a restaurant';
     case 'topFoods':
       return NUTRIENT_BY_KEY[route.key]?.name ?? 'Top sources';
     case 'body':
@@ -444,6 +447,8 @@ function renderRoute(route: Route, pop: () => void, onSignOut: () => Promise<voi
       return <TargetsScreen onDone={pop} />;
     case 'profile':
       return <ProfileScreen onDone={pop} />;
+    case 'menuImport':
+      return <MenuImportScreen onDone={pop} />;
     case 'topFoods':
       return <TopFoodsScreen nutrient={route.key} from={route.from} to={route.to} />;
   }

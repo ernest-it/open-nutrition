@@ -16,6 +16,7 @@ export type Route =
   | { name: 'savedMeal'; id: string }
   | { name: 'targets' }
   | { name: 'profile' }
+  | { name: 'menuImport' }
   | { name: 'topFoods'; key: NutrientKey; from: string; to: string };
 
 /** Root screens. The bottom bar shows today/diary/+/nutrients/more; the rail lists body/foods/settings directly. */

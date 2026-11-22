@@ -15,6 +15,7 @@ import { createMealEstimator, type AnthropicClient } from './llm';
 import { registerAiRoutes } from './ai';
 import { BarcodeError, BarcodeService } from './barcode';
 import { BrandedSearch } from './branded';
+import type { fetchPublicPage } from './pageFetch';
 import { FoodDb, MAX_SEARCH_LIMIT, openFoodDb } from './foods';
 import { registerMcp } from './mcp';
 
@@ -28,6 +29,8 @@ export interface AppDeps {
   now?: () => number;
   /** Outbound Open Food Facts calls per minute (default 10). */
   offPerMinute?: number;
+  /** Page fetcher for nutrition-page imports (tests). */
+  fetchPage?: typeof fetchPublicPage;
 }
 
 export { VERSION };
@@ -266,6 +269,7 @@ export function buildApp(config: Config, db: DB = openDatabase(config.databaseFi
       config,
       estimator,
       now: deps.now,
+      fetchPage: deps.fetchPage,
       log: { info: (o, m) => app.log.info(o, m), warn: (o, m) => app.log.warn(o, m) },
     });
 

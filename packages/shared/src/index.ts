@@ -6,3 +6,4 @@ export * from './ai';
 export * from './off';
 export * from './foodDb';
 export * from './csv';
+export * from './menuImport';
