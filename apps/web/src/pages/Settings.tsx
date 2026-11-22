@@ -378,6 +378,26 @@ function AiSection() {
               </select>
             </label>
           </div>
+          {status.webSearch ? (
+            <>
+              <label className="switch">
+                <input type="checkbox" checked={prefs.aiWebSearch === 'always'} onChange={(e) => setPrefs({ aiWebSearch: e.target.checked ? 'always' : 'auto' })} />
+                <span>Always search the web</span>
+              </label>
+              <p className="muted small">
+                Brand-name and restaurant items are always looked up on the web and show their source. Turn this on to search for every meal,
+                even plain foods: slower, and each search costs about 1¢ plus the text it returns.
+              </p>
+            </>
+          ) : (
+            <p className="muted small">Web lookups for brand-name items are turned off on this server.</p>
+          )}
+          {status.monthlyBudgetUsd != null && (
+            <p className="muted small">
+              Server budget (admins only): ${(status.spentThisMonthUsd ?? 0).toFixed(2)} spent this month
+              {status.monthlyBudgetUsd > 0 ? ` of $${status.monthlyBudgetUsd.toFixed(2)}. AI stops for everyone when it is reached.` : ', no budget set.'}
+            </p>
+          )}
           <p className="muted small">
             {AI_MODELS.find((m) => m.id === prefs.aiModel)?.label ?? modelLabel(prefs.aiModel)}: roughly {formatUsd(typicalMealCostUsd(prefs.aiModel))} per meal. Costs are paid by whoever runs
             this server{status.monthlyLimit > 0 ? `; your account can make ${status.monthlyLimit} estimates a month` : ''}.

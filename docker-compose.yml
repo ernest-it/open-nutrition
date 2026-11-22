@@ -25,7 +25,12 @@ services:
       # LLM_API_KEY: sk-ant-...        # or ANTHROPIC_API_KEY
       # LLM_MODEL: claude-opus-5-5     # or claude-sonnet-5-5 / claude-haiku-5-5
       # LLM_EFFORT: low                # low | medium | high
-      # AI_MONTHLY_LIMIT: "0"          # estimates per user per month, 0 = unlimited
+      # Spending limits (these are the defaults; "0" lifts a limit):
+      # AI_MONTHLY_BUDGET_USD: "25"    # most the whole server may spend on AI per month
+      # AI_MONTHLY_LIMIT: "150"        # AI requests per user per month
+      # AI_DAILY_LIMIT: "40"           # AI requests per user per day
+      # AI_WEB_SEARCH: "on"            # look up brand-name and restaurant items on the web ("off" to disable)
+      # AI_MAX_SEARCHES: "5"           # most web searches in one estimate (1-5)
     volumes:
       - open-nutrition-data:/data
 

@@ -86,6 +86,8 @@ export interface Prefs {
   aiEnabled: boolean;
   aiModel: string;
   aiEffort: 'low' | 'medium' | 'high';
+  /** 'auto': look up brand-name and restaurant items on the web. 'always': search for every meal. */
+  aiWebSearch: 'auto' | 'always';
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -95,6 +97,7 @@ export const DEFAULT_PREFS: Prefs = {
   aiEnabled: false,
   aiModel: 'claude-opus-5-5',
   aiEffort: 'low',
+  aiWebSearch: 'auto',
 };
 
 export const SETTING_PROFILE = 'profile';

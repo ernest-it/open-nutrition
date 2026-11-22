@@ -23,12 +23,28 @@ export interface Config {
     apiKey: string | null;
     model: string;
     effort: AiEffort;
-    /** Estimates per user per calendar month (UTC); 0 = unlimited. */
+    /** AI requests per user per calendar month (UTC); 0 = unlimited. */
     monthlyLimit: number;
+    /** AI requests per user per day (UTC); 0 = unlimited. */
+    dailyLimit: number;
+    /** Most the whole server may spend on AI in a calendar month, in USD; 0 = unlimited. */
+    monthlyBudgetUsd: number;
+    /** Web lookups for brand-name and restaurant items. */
+    webSearch: boolean;
+    /** Most web searches in one estimate. */
+    maxSearches: number;
+    /** AI requests running at the same time across all users. */
+    maxConcurrent: number;
   };
 }
 
 const bool = (v: string | undefined, d: boolean) => (v == null || v === '' ? d : /^(1|true|yes|on)$/i.test(v));
+/** A non-negative number from the environment; anything unreadable falls back to the (safe) default. */
+const num = (v: string | undefined, d: number) => {
+  if (v == null || v.trim() === '') return d;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : d;
+};
 
 /**
  * Default food DB location: the repo's apps/mobile/assets/foods.db. Both the
@@ -50,7 +66,6 @@ export function defaultFoodDbPath(): string {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const dataDir = env.DATA_DIR ?? path.resolve('data');
   const effort = env.LLM_EFFORT ?? 'low';
-  const limit = Number(env.AI_MONTHLY_LIMIT ?? 0);
   return {
     host: env.HOST ?? '0.0.0.0',
     port: Number(env.PORT ?? 8080),
@@ -68,7 +83,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       apiKey: env.LLM_API_KEY || env.ANTHROPIC_API_KEY || null,
       model: env.LLM_MODEL || DEFAULT_AI_MODEL,
       effort: effort === 'low' || effort === 'medium' || effort === 'high' ? effort : 'low',
-      monthlyLimit: Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 0,
+      // Safe defaults: an unset limit is a limit, not "unlimited". Set a value to 0 to lift it.
+      monthlyLimit: Math.floor(num(env.AI_MONTHLY_LIMIT, 150)),
+      dailyLimit: Math.floor(num(env.AI_DAILY_LIMIT, 40)),
+      monthlyBudgetUsd: num(env.AI_MONTHLY_BUDGET_USD, 25),
+      webSearch: !/^(0|false|no|off)$/i.test(env.AI_WEB_SEARCH ?? ''),
+      maxSearches: Math.max(1, Math.min(5, Math.floor(num(env.AI_MAX_SEARCHES, 5)))),
+      maxConcurrent: Math.max(1, Math.floor(num(env.AI_MAX_CONCURRENT, 4))),
     },
   };
 }

@@ -68,7 +68,12 @@ Prebuilt server images are at `ghcr.io/ernest-it/open-nutrition:latest` (amd64 a
 |---|---|---|
 | `LLM_PROVIDER` | *(unset)* | Set to `anthropic` to enable AI meal logging on the server |
 | `LLM_API_KEY` | | Claude API key (`ANTHROPIC_API_KEY` also works). Stays on the server |
-| `AI_MONTHLY_LIMIT` | `0` | Per-user cap on AI estimates per month (`0` = unlimited) |
+| `AI_MONTHLY_BUDGET_USD` | `25` | Most the whole server may spend on AI in a calendar month, in US dollars. When it is reached, AI stops for everyone until the 1st (`0` = no budget) |
+| `AI_MONTHLY_LIMIT` | `150` | Per-user cap on AI requests per calendar month (`0` = unlimited) |
+| `AI_DAILY_LIMIT` | `40` | Per-user cap on AI requests per day (`0` = unlimited) |
+| `AI_WEB_SEARCH` | `on` | Look up brand-name and restaurant items on the web during an estimate. `off` disables it for everyone |
+| `AI_MAX_SEARCHES` | `5` | Most web searches in one estimate (1 to 5). Each search costs about 1¢ plus the text it returns |
+| `AI_MAX_CONCURRENT` | `4` | AI requests running at the same time across all users |
 | `USDA_API_KEY` | *(unset)* | Optional free [api.data.gov](https://api.data.gov/signup/) key; enables search of USDA packaged (branded) foods and the USDA fallback for barcodes |
 | `FOOD_DB_PATH` | `/app/foods.db` (in the image) | Path to the bundled USDA food database |
 

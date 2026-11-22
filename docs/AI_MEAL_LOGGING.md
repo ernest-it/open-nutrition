@@ -61,7 +61,7 @@ Rules the app follows:
 
 Foods → **Import from a restaurant** (web: also in Add food). The user pastes the address of a restaurant's own nutrition page or nutrition PDF, or pastes the page's text. Claude transcribes the menu items (name, serving, serving weight, and per-serving calories, fat, saturated fat, sodium, carbohydrates, fibre, sugars, added sugars and protein as printed) and the user ticks which ones to save. Saved items become ordinary custom foods with the restaurant as the brand; nothing else is stored.
 
-- **Same availability as AI logging:** signed in to a server with AI set up (the server fetches the page and calls Claude; one request counts against `AI_MONTHLY_LIMIT`), or local-only mode with your own key (the phone fetches the page and calls Anthropic directly).
+- **Same availability as AI logging:** signed in to a server with AI set up (the server fetches the page and calls Claude; one request counts against the AI limits), or local-only mode with your own key (the phone fetches the page and calls Anthropic directly).
 - **Transcription, not estimation:** the prompt (`MENU_IMPORT_SYSTEM_PROMPT` in `packages/shared/src/menuImport.ts`) says to copy printed values and use null for anything not listed. The only estimated value is a serving's weight when the page gives none; such servings are labelled "(weight estimated)".
 - **One page, on request:** each import is a single read of one page the user chose, for that user only. Nothing is crawled, cached or shared between users, and no restaurant data ships with the app.
 - **Server safety:** the server only opens public http(s) addresses on ports 80/443. Every resolved IP must be public, checked inside the socket's own DNS lookup (so DNS rebinding cannot reach the LAN, localhost or cloud metadata), and redirects are re-checked (`apps/server/src/pageFetch.ts`). Pages are limited to 20 MB and 15 s.
@@ -77,3 +77,50 @@ Before trusting any model or effort setting, build a small eval set:
 4. Record cost and latency per run, then pick the default model and effort from the results.
 
 Keep the eval set and results out of the public repo if the photos are personal.
+
+## Where the numbers come from
+
+Every item on the review screen says where its numbers come from:
+
+| Shown as | Meaning |
+|---|---|
+| **USDA match** | A generic food (a banana, rice, chicken breast). Claude names the food and estimates the amount; the nutrient values are the USDA database's, not Claude's. |
+| **Published numbers** with a link | A brand-name product or a restaurant item. Claude searched the web, copied the published nutrition facts, and the link opens the page it used. |
+| **AI estimate** | Nothing better was found. The numbers are Claude's own estimate. |
+
+A source link is only shown when it is a page the web search actually returned for that request. A link Claude could not have seen is dropped and the item is shown as an estimate.
+
+### Web search
+
+- **Default:** Claude searches only when a meal contains a brand-name or restaurant item, at most 3 searches per meal.
+- **Always search the web** (Settings → AI): Claude searches for every meal, at most 5 searches. Slower, and it costs more.
+- **Cost:** Anthropic charges $10 per 1,000 searches (1¢ each), and the text of the results is billed as input tokens, so a meal with a looked-up item costs noticeably more than one without.
+- **Server owners** can turn web search off for everyone with `AI_WEB_SEARCH=off`, or lower the per-meal cap with `AI_MAX_SEARCHES`.
+- If the Anthropic account has web search disabled, the estimate is made without it and says so.
+
+### Uncertain portions
+
+When the amount is the main uncertainty, the item shows a few amounts to choose from ("half a cup", "1 cup"). Tapping one rescales the item on the device; it does not make another AI request.
+
+## Spending limits
+
+Whoever holds the API key pays for every request, so the server limits them. These are on by default:
+
+| Limit | Default | Setting |
+|---|---|---|
+| Whole server, per month | $25 | `AI_MONTHLY_BUDGET_USD` |
+| Per user, per month | 150 requests | `AI_MONTHLY_LIMIT` |
+| Per user, per day | 40 requests | `AI_DAILY_LIMIT` |
+| Per user, per hour (attempts, including failed ones) | 30 | fixed |
+| Per user, at the same time | 1 request | fixed |
+| Whole server, at the same time | 4 requests | `AI_MAX_CONCURRENT` |
+| Web searches per estimate | 3 (5 with "always") | `AI_MAX_SEARCHES` |
+| Output per estimate / per menu import | 16,000 / 32,000 tokens | fixed |
+
+- **The budget is checked before each request** against what has been spent this month plus the worst case of every request still running. When it is reached, AI stops for everyone until the 1st of the next month. Admins see the amount spent in Settings → AI.
+- **One tap is one request.** Neither the apps nor the server ever resend a failed request; the error is shown and the user decides. The only exceptions are fixed in code and tested: one retry without web search when Anthropic rejects the request outright (a rejected request is not billed), and one continuation when Anthropic pauses a long search. An estimate can never make more than 3 requests.
+- **Failures are counted honestly.** A request Anthropic rejected is given back to the user. A request that timed out stays counted, because it may have been billed. An answer that came back unusable has its cost added to the month's spending.
+- **Only signed-in users can use AI**, and registration is closed by default after the first account.
+- The budget is an estimate from token counts and list prices. For a hard stop on Anthropic's side as well, use a dedicated API key in a Console workspace with its own spend limit.
+
+In local-only mode the phone calls Anthropic with the user's own key, so the server limits do not apply; the one-request rule, the search cap and the output caps still do.

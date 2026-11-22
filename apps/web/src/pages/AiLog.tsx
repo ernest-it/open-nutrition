@@ -10,12 +10,11 @@ import {
   typicalMealCostUsd,
   type Food,
   type Meal,
-  type MealEstimate,
   type Prefs,
   type ReviewItem,
 } from '@open-nutrition/shared';
 import { errorMessage, setPrefs, store } from '../state';
-import { downscaleImage, requestEstimate, searchFoods, searchLocalFoods, sha256Base64, type AiStatus } from '../foodApi';
+import { downscaleImage, requestEstimate, searchFoods, searchLocalFoods, sha256Base64, type AiEstimateResponse, type AiStatus } from '../foodApi';
 import { FoodRow, MacroLine, NutrientSummary } from '../components';
 import { Empty, grams, Icon, kcal, MEAL_LABEL, MealSelect, NumberInput } from '../ui';
 import { InlineError, Spinner } from '../feedback';
@@ -59,10 +58,12 @@ export function AiLog({
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ estimate: MealEstimate; model: string; inputTokens: number; outputTokens: number; costUsd: number } | null>(null);
+  const [result, setResult] = useState<AiEstimateResponse | null>(null);
   const [items, setItems] = useState<Item[]>([]);
   const [swapping, setSwapping] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
+  // Guards against a second request while one is running (a double click must not be billed twice).
+  const sending = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const model = pickModel(status, prefs);
   const limitReached = status.monthlyLimit > 0 && status.usedThisMonth >= status.monthlyLimit;
@@ -99,8 +100,10 @@ export function AiLog({
   }
 
   async function estimate() {
+    if (sending.current) return;
+    sending.current = true;
     setError(null);
-    setBusy('Claude is looking at your meal…');
+    setBusy(status.webSearch ? 'Claude is looking at your meal and looking up brands… (up to a minute)' : 'Claude is looking at your meal…');
     try {
       const r = await requestEstimate({
         imageBase64: photo?.base64,
@@ -108,6 +111,7 @@ export function AiLog({
         description: description.trim() || undefined,
         model,
         effort: prefs.aiEffort,
+        webSearch: prefs.aiWebSearch,
       });
       setBusy('Matching foods to the database…');
       const resolved = await resolveEstimate(r.estimate, (q) => searchFoods(q, 10));
@@ -116,6 +120,7 @@ export function AiLog({
     } catch (e) {
       setError(errorMessage(e));
     } finally {
+      sending.current = false;
       setBusy(null);
     }
   }
@@ -158,7 +163,8 @@ export function AiLog({
         <div className="review-head">
           <h3>Review before adding</h3>
           <span className="muted small">
-            {modelLabel(result.model)} · cost {formatUsd(result.costUsd)}
+            {modelLabel(result.model)}
+            {result.webSearches ? ` · ${result.webSearches} web ${result.webSearches === 1 ? 'search' : 'searches'}` : ''} · cost {formatUsd(result.costUsd)}
           </span>
         </div>
         {result.estimate.assumptions.length > 0 && (
@@ -177,7 +183,7 @@ export function AiLog({
                   <strong className="ellipsis-2">{it.name}</strong>
                   <div className="muted small">
                     <span className={`conf conf-${it.confidence}`}>{it.confidence} confidence</span> ·{' '}
-                    {it.usedAi || !it.matchedFood ? <span className="badge">AI nutrients</span> : <span>matched: {it.matchedFood.name}</span>}
+                    <ItemSource item={it} />
                   </div>
                 </div>
                 <strong className="nowrap">{kcal(it.nutrients[N.energy])} kcal</strong>
@@ -198,6 +204,22 @@ export function AiLog({
                   aria-label={`Portion of ${it.name}`}
                 />
               </div>
+              {!!it.portionOptions?.length && (
+                <div className="portion-options" role="group" aria-label={`How much ${it.name} was it?`}>
+                  <span className="muted small">How much was it?</span>
+                  {it.portionOptions.map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      className={`small ${Math.round(p.grams) === Math.round(it.grams) ? 'active' : ''}`}
+                      aria-pressed={Math.round(p.grams) === Math.round(it.grams)}
+                      onClick={() => update(it.key, (x) => ({ ...rescaleReviewItem(x, p.grams), key: x.key }))}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <MacroLine n={it.nutrients} className="small" />
               {it.notes && <p className="muted small">{it.notes}</p>}
               <div className="row">
@@ -288,11 +310,27 @@ export function AiLog({
       </button>
       <p className="muted small">
         {modelLabel(model)} · about {formatUsd(typicalMealCostUsd(model))} per meal
+        {status.webSearch ? ', more when brands are looked up' : ''}
         {status.monthlyLimit > 0 && ` · ${status.usedThisMonth} of ${status.monthlyLimit} used this month`}
       </p>
       <AiPrivacyNote />
     </div>
   );
+}
+
+/** Where an item's numbers come from: a published page, the food database, or the model's own estimate. */
+function ItemSource({ item }: { item: ReviewItem }) {
+  if (item.source === 'web' && item.sourceUrl)
+    return (
+      <span>
+        published numbers:{' '}
+        <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer nofollow">
+          {item.sourceName || 'source'}
+        </a>
+      </span>
+    );
+  if (!item.usedAi && item.matchedFood) return <span>USDA match: {item.matchedFood.name}</span>;
+  return <span className="badge">{item.brand ? 'AI estimate · no published numbers found' : 'AI estimate'}</span>;
 }
 
 function SwapSearch({ initial, onPick }: { initial: string; onPick: (f: Food) => void }) {

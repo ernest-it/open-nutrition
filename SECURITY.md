@@ -13,7 +13,7 @@ Please **don't open a public issue** for security problems. Use GitHub's private
 - **AI meal logging and your API key:**
   - With `LLM_PROVIDER=anthropic`, meal photos and descriptions are sent to Anthropic when a user runs an AI estimate. AI stays off until it is enabled.
   - The server key (`LLM_API_KEY`) lives only in the server environment. It is never synced, logged or sent to clients.
-  - Use `AI_MONTHLY_LIMIT` to cap estimates per user and bound costs.
+  - Spending is bounded by default: a server-wide monthly budget (`AI_MONTHLY_BUDGET_USD`, $25), per-user monthly and daily request caps (`AI_MONTHLY_LIMIT`, `AI_DAILY_LIMIT`), one AI request per user at a time, and a cap on web searches per estimate. One user action makes one request to Anthropic; the server never retries a failed request.
   - Create a **dedicated key** in a **Claude Console workspace with a monthly spend limit**, so a leaked key costs little and can be revoked without affecting anything else.
   - Open Food Facts lookups go through the server with a custom User-Agent and are cached separately from user data.
 - **Keep the image updated:** `docker compose pull && docker compose up -d`.

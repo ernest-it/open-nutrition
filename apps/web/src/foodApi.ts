@@ -66,6 +66,13 @@ export interface AiStatus {
   defaultModel: string;
   monthlyLimit: number;
   usedThisMonth: number;
+  dailyLimit?: number;
+  usedToday?: number;
+  /** The server looks up brand-name and restaurant items on the web. */
+  webSearch?: boolean;
+  /** Admins only: the server-wide AI budget and what has been spent this month. */
+  monthlyBudgetUsd?: number;
+  spentThisMonthUsd?: number;
 }
 
 let aiStatusCache: { at: number; value: AiStatus } | null = null;
@@ -89,14 +96,18 @@ export interface AiEstimateResponse {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  webSearches?: number;
+  searchUnavailable?: boolean;
 }
 
+/** One request per call: nothing here retries, so a failed estimate is never sent (or billed) twice. */
 export async function requestEstimate(body: {
   imageBase64?: string;
   mediaType?: string;
   description?: string;
   model?: string;
   effort?: AiEffort;
+  webSearch?: 'off' | 'auto' | 'always';
 }): Promise<AiEstimateResponse> {
   try {
     const r = await api<AiEstimateResponse>('/api/v1/ai/estimate', { method: 'POST', body: JSON.stringify(body) });

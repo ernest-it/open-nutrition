@@ -109,7 +109,11 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
     [],
   );
 
+  // True while a request is in flight: a second tap must never send (and bill) a second request.
+  const inFlight = useRef(false);
   async function send() {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setError(null);
     setPhase('sending');
     const my = ++request.current;
@@ -119,6 +123,7 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
         effort: prefs.aiEffort,
         imageBase64: image?.base64 ?? null,
         description: description.trim() || null,
+        webSearch: prefs.aiWebSearch,
       });
       const resolved = await resolveEstimate(r.estimate, (q) => searchFoods(store, q, 12));
       if (my !== request.current) return;
@@ -131,6 +136,8 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
       setError({ title: 'The estimate didn’t work', message: e instanceof AiError ? e.message : (e as Error).message, retry: true });
       setPhase('compose');
       haptic.warn();
+    } finally {
+      inFlight.current = false;
     }
   }
 
@@ -299,7 +306,8 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
           <ActivityIndicator size="large" color={t.accent} />
           <T bold>Estimating your meal…</T>
           <T small muted style={{ textAlign: 'center', maxWidth: 360 }}>
-            This usually takes 5–20 seconds. Portions are then matched against the USDA database.
+            This usually takes 5–20 seconds, or up to a minute when brand-name or restaurant items are looked up on the web. Plain foods are then
+            matched against the USDA database.
           </T>
           <Button title="Cancel" variant="ghost" onPress={cancelSend} />
         </View>
@@ -343,7 +351,8 @@ export function AiLogScreen({ onBack }: { onBack?: () => void }) {
           <T muted>{macroLine(totals)}</T>
           {result.costUsd != null && (
             <T small muted style={{ marginTop: 4 }}>
-              This estimate cost {formatCost(result.costUsd)} ({modelName(result.model)}).
+              This estimate cost {formatCost(result.costUsd)} ({modelName(result.model)}
+              {result.webSearches ? `, ${result.webSearches} web ${result.webSearches === 1 ? 'search' : 'searches'}` : ''}).
             </T>
           )}
         </Card>
@@ -474,8 +483,28 @@ function ReviewCard({ item, onGrams, onSwap, onDelete }: { item: ReviewItem; onG
           </T>
           <View style={[styles.row, { flexWrap: 'wrap', marginTop: 2, gap: 6 }]}>
             <Badge text={`${item.confidence} confidence`} color={conf} />
-            {item.usedAi ? <Badge text="AI estimate" color={t.accent} /> : <Badge text="USDA match" color={t.success} />}
+            {item.source === 'web' && item.sourceUrl ? (
+              <Badge text="Published numbers" color={t.success} />
+            ) : item.usedAi ? (
+              <Badge text="AI estimate" color={t.accent} />
+            ) : (
+              <Badge text="USDA match" color={t.success} />
+            )}
           </View>
+          {item.source === 'web' && item.sourceUrl ? (
+            <Button
+              small
+              variant="ghost"
+              title={`Source: ${item.sourceName || 'web page'}`}
+              accessibilityLabel={`Open the source of these numbers: ${item.sourceName || 'web page'}`}
+              onPress={() => void Linking.openURL(item.sourceUrl!).catch(() => {})}
+              style={{ alignSelf: 'flex-start' }}
+            />
+          ) : item.usedAi && item.brand ? (
+            <T small muted style={{ marginTop: 2 }}>
+              No published numbers were found for this {item.brand} item.
+            </T>
+          ) : null}
           {item.matchedFood && (
             <T small muted style={{ marginTop: 2 }} lines={2}>
               {item.matchedFood.name}
@@ -498,6 +527,25 @@ function ReviewCard({ item, onGrams, onSwap, onDelete }: { item: ReviewItem; onG
           </T>
         </View>
       </View>
+      {!!item.portionOptions?.length && (
+        <View style={{ marginTop: 6 }}>
+          <T small muted>
+            How much was it?
+          </T>
+          <View style={[styles.row, { flexWrap: 'wrap', marginTop: 2 }]}>
+            {item.portionOptions.map((p) => (
+              <Button
+                key={p.label}
+                small
+                variant={Math.round(p.grams) === Math.round(item.grams) ? 'primary' : undefined}
+                title={p.label}
+                onPress={() => onGrams(p.grams)}
+                accessibilityLabel={`Set ${item.name} to ${p.label}`}
+              />
+            ))}
+          </View>
+        </View>
+      )}
       <View style={[styles.row, { flexWrap: 'wrap', marginTop: 4 }]}>
         {[0.5, 0.75, 1.25, 1.5].map((f) => (
           <Button key={f} small title={`×${f}`} onPress={() => onGrams(Math.round(item.grams * f))} accessibilityLabel={`Multiply portion by ${f}`} />

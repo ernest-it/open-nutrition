@@ -15,13 +15,14 @@ import Anthropic from '@anthropic-ai/sdk';
 import {
   AiError,
   aiErrorFromHttp,
-  buildMealEstimateRequest,
   buildMenuImportRequest,
-  estimateCostUsd,
   mealEstimateBetas,
-  parseMealEstimateResponse,
   parseMenuImportResponse,
+  runMealEstimate,
+  usageCostUsd,
+  usageOf,
   type AiEffort,
+  type AiWebSearch,
   type MealEstimate,
   type MenuImport,
   type MenuPage,
@@ -37,6 +38,8 @@ export interface EstimateInput {
   imageBase64?: string | null;
   mediaType?: string | null;
   description?: string | null;
+  webSearch?: AiWebSearch;
+  maxSearches?: number;
 }
 
 export interface EstimateOutput {
@@ -44,8 +47,17 @@ export interface EstimateOutput {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  /** Web searches Claude ran (each is billed). */
+  webSearches: number;
+  /** Web search was asked for but could not run. */
+  searchUnavailable: boolean;
   costUsd: number;
 }
+
+/** Output allowance of one menu import (bounds what a single import can cost). */
+export const MENU_MAX_TOKENS = 32_000;
+/** Output allowance of one meal estimate. */
+export const ESTIMATE_MAX_TOKENS = 16_000;
 
 export interface MenuOutput {
   menu: MenuImport;
@@ -65,41 +77,59 @@ export class AnthropicMealEstimator implements MealEstimator {
   constructor(private client: AnthropicClient) {}
 
   async estimate(input: EstimateInput): Promise<EstimateOutput> {
-    const body = buildMealEstimateRequest(input); // throws AiError('no_input')
-    const betas = mealEstimateBetas(body);
-    let msg: unknown;
-    try {
-      msg = betas.length
-        ? await this.client.beta.messages.create({ ...body, betas } as unknown as Anthropic.Beta.MessageCreateParamsNonStreaming)
-        : await this.client.messages.create(body as unknown as Anthropic.MessageCreateParamsNonStreaming);
-    } catch (e) {
-      throw toAiError(e);
-    }
-    const r = parseMealEstimateResponse(msg);
-    const costUsd = estimateCostUsd(r.model, r.inputTokens, r.outputTokens, {
-      readTokens: r.cacheReadInputTokens,
-      writeTokens: r.cacheCreationInputTokens,
+    // runMealEstimate bounds the number of requests; the SDK itself never retries (NO_RETRY).
+    const r = await runMealEstimate({ ...input, maxTokens: ESTIMATE_MAX_TOKENS }, async (body) => {
+      const betas = mealEstimateBetas(body);
+      const opts = { ...NO_RETRY, timeout: body.tools ? 240_000 : 120_000 };
+      try {
+        return betas.length
+          ? await this.client.beta.messages.create({ ...body, betas } as unknown as Anthropic.Beta.MessageCreateParamsNonStreaming, opts)
+          : await this.client.messages.create(body as unknown as Anthropic.MessageCreateParamsNonStreaming, opts);
+      } catch (e) {
+        throw toAiError(e);
+      }
     });
-    return { estimate: r.estimate, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens, costUsd };
+    return {
+      estimate: r.estimate,
+      model: r.model,
+      inputTokens: r.inputTokens,
+      outputTokens: r.outputTokens,
+      webSearches: r.webSearches,
+      searchUnavailable: r.searchUnavailable,
+      costUsd: usageCostUsd(r.model || input.model, r),
+    };
   }
 
   async readMenu(input: { page: MenuPage; model: string; effort: AiEffort }): Promise<MenuOutput> {
-    const body = buildMenuImportRequest(input);
+    const body = buildMenuImportRequest({ ...input, maxTokens: MENU_MAX_TOKENS });
     const betas = mealEstimateBetas(body);
+    const opts = { ...NO_RETRY, timeout: 600_000 };
     let msg: unknown;
     try {
       // Streamed: a whole menu can be a long answer (avoids HTTP timeouts on big max_tokens).
       msg = betas.length
-        ? await this.client.beta.messages.stream({ ...body, betas } as unknown as Anthropic.Beta.MessageCreateParamsStreaming, { timeout: 600_000 }).finalMessage()
-        : await this.client.messages.stream(body as unknown as Anthropic.MessageCreateParamsStreaming, { timeout: 600_000 }).finalMessage();
+        ? await this.client.beta.messages.stream({ ...body, betas } as unknown as Anthropic.Beta.MessageCreateParamsStreaming, opts).finalMessage()
+        : await this.client.messages.stream(body as unknown as Anthropic.MessageCreateParamsStreaming, opts).finalMessage();
     } catch (e) {
       throw toAiError(e);
     }
-    const r = parseMenuImportResponse(msg);
-    const costUsd = estimateCostUsd(r.model, r.inputTokens, r.outputTokens, { readTokens: r.cacheReadInputTokens, writeTokens: r.cacheCreationInputTokens });
-    return { menu: r.menu, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens, costUsd };
+    const usage = usageOf(msg);
+    try {
+      const r = parseMenuImportResponse(msg);
+      return { menu: r.menu, model: r.model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: usageCostUsd(r.model || input.model, usage) };
+    } catch (e) {
+      // The answer was unusable but it was still billed: let the caller count its cost.
+      if (e instanceof AiError && !e.usage) e.usage = usage;
+      throw e;
+    }
   }
 }
+
+/**
+ * One user action is one request: the SDK must never resend on its own. A request that timed
+ * out on our side may still have been answered (and billed) on Anthropic's.
+ */
+const NO_RETRY = { maxRetries: 0 } as const;
 
 /** SDK/transport errors → AiError with a message safe to show users (server mode wording). */
 export function toAiError(e: unknown): AiError {
@@ -109,7 +139,7 @@ export function toAiError(e: unknown): AiError {
   }
   if (e instanceof Anthropic.APIError && typeof e.status === 'number') {
     const err = aiErrorFromHttp(e.status);
-    if (err.code === 'auth') return new AiError('auth', "The server's AI key was rejected. Ask the server admin to check it.");
+    if (err.code === 'auth') err.message = "The server's AI key was rejected. Ask the server admin to check it.";
     return err;
   }
   return new AiError('api_error', 'The AI request failed.');
@@ -143,5 +173,5 @@ export function createMealEstimator(config: Config, client?: AnthropicClient | n
   if (client === null) return null;
   if (client) return new AnthropicMealEstimator(client);
   if (config.ai.provider !== 'anthropic' || !config.ai.apiKey) return null;
-  return new AnthropicMealEstimator(new Anthropic({ apiKey: config.ai.apiKey, timeout: 120_000, maxRetries: 2 }));
+  return new AnthropicMealEstimator(new Anthropic({ apiKey: config.ai.apiKey, timeout: 120_000, maxRetries: 0 }));
 }

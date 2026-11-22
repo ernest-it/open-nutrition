@@ -109,7 +109,7 @@ describe('buildMealEstimateRequest', () => {
     expect(content[1]!.text).toContain('half the rice');
     expect(content[1]!.text).toContain('ground truth');
     expect(body.output_config.effort).toBe('low');
-    expect(body.output_config.format.type).toBe('json_schema');
+    expect(body.output_config.format?.type).toBe('json_schema');
     expect(body.fallbacks).toBe('default');
     expect(mealEstimateBetas(body)).toEqual([FALLBACK_BETA]);
     expect('thinking' in body).toBe(false);

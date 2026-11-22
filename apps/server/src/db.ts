@@ -76,6 +76,14 @@ function migrate(db: DB) {
       costUsd REAL NOT NULL DEFAULT 0,
       PRIMARY KEY (userId, month)
     );
+
+    -- AI requests per user per day (UTC, 'YYYY-MM-DD'), for the daily cap.
+    CREATE TABLE IF NOT EXISTS ai_daily (
+      userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      day TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (userId, day)
+    );
   `);
 
   // One table per syncable collection, derived from the shared zod schemas.

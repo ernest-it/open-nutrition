@@ -13,15 +13,15 @@ import {
   AiError,
   aiErrorFromHttp,
   anthropicHeaders,
-  buildMealEstimateRequest,
   buildMenuImportRequest,
+  runMealEstimate,
+  usageCostUsd,
   checkText,
   estimateCostUsd,
   pageFromBytes,
   parseMenuImportResponse,
   MenuImport,
   MAX_MENU_PDF_BYTES,
-  parseMealEstimateResponse,
   MealEstimate,
   type AiEffort,
   type AiErrorCode,
@@ -98,6 +98,7 @@ export interface EstimateResult {
   inputTokens: number;
   outputTokens: number;
   costUsd: number | null;
+  webSearches: number;
 }
 
 export interface EstimateInput {
@@ -105,9 +106,17 @@ export interface EstimateInput {
   effort: AiEffort;
   imageBase64?: string | null;
   description?: string | null;
+  /** 'auto': look up brand-name and restaurant items. 'always': search for every meal. */
+  webSearch?: 'off' | 'auto' | 'always';
 }
 
-const TIMEOUT_MS = 120_000;
+// Looking up brands on the web can take a while.
+const TIMEOUT_MS = 240_000;
+
+/**
+ * One estimate. Nothing here retries: a failure is shown to the user, who decides whether to
+ * send it again. (runMealEstimate may send one bounded follow-up; see @open-nutrition/shared.)
+ */
 
 export async function requestEstimate(account: Account, input: EstimateInput): Promise<EstimateResult> {
   const ctrl = new AbortController();
@@ -132,6 +141,7 @@ async function viaServer(account: Account, input: EstimateInput, signal: AbortSi
       description: input.description?.trim() || undefined,
       model: input.model,
       effort: input.effort,
+      webSearch: input.webSearch,
     }),
     signal,
   });
@@ -159,36 +169,40 @@ async function viaServer(account: Account, input: EstimateInput, signal: AbortSi
     inputTokens: Number(body.inputTokens ?? 0),
     outputTokens: Number(body.outputTokens ?? 0),
     costUsd: typeof body.costUsd === 'number' ? body.costUsd : null,
+    webSearches: Number(body.webSearches ?? 0),
   };
 }
 
 async function direct(input: EstimateInput, signal: AbortSignal): Promise<EstimateResult> {
   const key = await getApiKey();
   if (!key) throw new AiError('not_configured', 'Add your Anthropic API key in Settings → AI first.');
-  const body = buildMealEstimateRequest({
-    model: input.model,
-    effort: input.effort,
-    imageBase64: input.imageBase64,
-    mediaType: input.imageBase64 ? 'image/jpeg' : null,
-    description: input.description,
-  });
-  const res = await fetch(ANTHROPIC_MESSAGES_URL, {
-    method: 'POST',
-    headers: anthropicHeaders(key, body, { browser: true }),
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!res.ok) throw aiErrorFromHttp(res.status, await res.text());
-  const r = parseMealEstimateResponse(await res.json());
+  const r = await runMealEstimate(
+    {
+      model: input.model,
+      effort: input.effort,
+      imageBase64: input.imageBase64,
+      mediaType: input.imageBase64 ? 'image/jpeg' : null,
+      description: input.description,
+      webSearch: input.webSearch ?? 'auto',
+    },
+    async (body) => {
+      const res = await fetch(ANTHROPIC_MESSAGES_URL, {
+        method: 'POST',
+        headers: anthropicHeaders(key, body, { browser: true }),
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (!res.ok) throw aiErrorFromHttp(res.status, await res.text());
+      return res.json();
+    },
+  );
   return {
     estimate: r.estimate,
     model: r.model || input.model,
     inputTokens: r.inputTokens,
     outputTokens: r.outputTokens,
-    costUsd: estimateCostUsd(r.model || input.model, r.inputTokens, r.outputTokens, {
-      readTokens: r.cacheReadInputTokens,
-      writeTokens: r.cacheCreationInputTokens,
-    }),
+    costUsd: usageCostUsd(r.model || input.model, r),
+    webSearches: r.webSearches,
   };
 }
 
@@ -276,6 +290,9 @@ export interface ServerAiStatus {
   defaultModel: string;
   monthlyLimit: number;
   usedThisMonth: number;
+  dailyLimit?: number;
+  usedToday?: number;
+  webSearch?: boolean;
 }
 
 export async function fetchServerAiStatus(account: Account): Promise<ServerAiStatus | null> {

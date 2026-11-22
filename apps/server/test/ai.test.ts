@@ -68,15 +68,22 @@ describe('AI estimate', () => {
       defaultEffort: 'low',
       monthlyLimit: 5,
       usedThisMonth: 0,
+      dailyLimit: 40,
+      usedToday: 0,
+      webSearch: true,
+      // the first account is the admin, who also sees the server-wide budget
+      monthlyBudgetUsd: 25,
+      spentThisMonthUsd: 0,
     });
     // declared jpeg, bytes are PNG: the sniffed type wins
-    const r = await t.post({ imageBase64: PNG, mediaType: 'image/jpeg', description: 'chicken, no oil' });
+    const r = await t.post({ imageBase64: PNG, mediaType: 'image/jpeg', description: 'chicken, no oil', webSearch: 'off' });
     expect(r.statusCode).toBe(200);
     const body = r.json();
-    expect(body.estimate).toEqual(estimate);
+    expect(body.estimate).toMatchObject(estimate);
     expect(body).toMatchObject({ model: 'claude-opus-5-5', inputTokens: 3000, outputTokens: 500 });
     expect(body.costUsd).toBeCloseTo((1000 * 4 + 2000 * 0.2 + 500 * 20) / 1e6, 8);
-    expect((await t.status()).usedThisMonth).toBe(1);
+    expect(await t.status()).toMatchObject({ usedThisMonth: 1, usedToday: 1 });
+    expect((await t.status()).spentThisMonthUsd).toBeCloseTo(body.costUsd, 8);
 
     // Opus supports server-side fallbacks -> beta endpoint with the beta flag
     const call = t.calls[0]!;

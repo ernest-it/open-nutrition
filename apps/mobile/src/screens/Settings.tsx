@@ -288,6 +288,18 @@ function AiSettings() {
             value={prefs.aiEffort}
             onChange={(v) => setPrefs({ aiEffort: v })}
           />
+          {account.server && status && status.enabled && status.webSearch === false ? (
+            <T small muted style={{ marginTop: 8 }}>
+              Web lookups for brand-name items are turned off on your server.
+            </T>
+          ) : (
+            <Toggle
+              label="Always search the web"
+              hint="Brand-name and restaurant items are always looked up and show their source. Turn this on to search for every meal, even plain foods: slower, and each search costs about 1¢ plus the text it returns."
+              value={prefs.aiWebSearch === 'always'}
+              onChange={(v) => setPrefs({ aiWebSearch: v ? 'always' : 'auto' })}
+            />
+          )}
           {account.server ? (
             status === undefined ? (
               <T small muted style={{ marginTop: 6 }}>

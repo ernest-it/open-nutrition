@@ -1,12 +1,32 @@
-// AI meal-estimate endpoints with a per-user monthly cap.
+// AI endpoints (meal estimates, menu import) and everything that keeps them from running up a bill.
+//
+// The server owner pays for every request, so each one passes these gates, in order:
+//   1. sign-in (all /api/v1 routes) and a per-user burst limit (30 attempts an hour);
+//   2. one AI request per user at a time, and a small number across the whole server;
+//   3. the server-wide monthly budget in USD, checked against what was spent plus the worst
+//      case of every request still running;
+//   4. the per-user daily and monthly request caps.
+// One user action makes one upstream request: nothing here or in llm.ts retries. The single
+// bounded exception lives in runMealEstimate (@open-nutrition/shared).
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { AI_MODELS, AiError, MAX_MENU_TEXT_CHARS, checkText, pageFromBytes, type MenuPage } from '@open-nutrition/shared';
+import {
+  AI_MODELS,
+  AiError,
+  MAX_MENU_TEXT_CHARS,
+  WEB_SEARCH_MAX_USES,
+  checkText,
+  pageFromBytes,
+  usageCostUsd,
+  worstCaseCostUsd,
+  type AiWebSearch,
+  type MenuPage,
+} from '@open-nutrition/shared';
 import { RateLimiter } from './auth';
 import type { Config } from './config';
 import type { DB } from './db';
-import { aiErrorStatus, toAiError, type MealEstimator } from './llm';
+import { ESTIMATE_MAX_TOKENS, MENU_MAX_TOKENS, aiErrorStatus, toAiError, type MealEstimator } from './llm';
 import { PageFetchError, fetchPublicPage } from './pageFetch';
 
 export const AI_BODY_LIMIT = 8 * 1024 * 1024;
@@ -18,6 +38,8 @@ const estimateBody = z.object({
   description: z.string().max(4000).nullish(),
   model: z.string().max(100).nullish(),
   effort: z.enum(['low', 'medium', 'high']).nullish(),
+  /** 'auto' (default): look up brand-name items. 'always': search for every meal. 'off': never. */
+  webSearch: z.enum(['off', 'auto', 'always']).nullish(),
 });
 
 const menuBody = z.object({
@@ -44,6 +66,7 @@ export function sniffImageType(b64: string): (typeof MEDIA_TYPES)[number] | null
 }
 
 const month = (ms: number) => new Date(ms).toISOString().slice(0, 7);
+const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 export interface AiDeps extends AiRouteDeps {
   db: DB;
@@ -53,47 +76,120 @@ export interface AiDeps extends AiRouteDeps {
   log: { info: (o: object, msg: string) => void; warn: (o: object, msg: string) => void };
 }
 
+/** Errors where the Anthropic API never ran the request, so nothing was billed. */
+const unbilled = (e: AiError) => !e.usage && (e.httpStatus != null || e.code === 'no_input' || e.code === 'not_configured');
+
 export function registerAiRoutes(r: FastifyInstance, deps: AiDeps) {
   const { db, config, estimator } = deps;
   const now = deps.now ?? Date.now;
-  const limit = config.ai.monthlyLimit;
-  // Burst protection on top of the monthly cap.
+  const { monthlyLimit, dailyLimit, monthlyBudgetUsd: budget } = config.ai;
+  // Burst protection on top of the caps: counts every attempt, including failed ones.
   const burst = new RateLimiter(30, 60 * 60_000);
   const allowedModels = new Set([...AI_MODELS.map((m) => m.id), config.ai.model]);
 
-  const used = (userId: string) =>
-    (db.prepare('SELECT count FROM ai_usage WHERE userId = ? AND month = ?').get(userId, month(now())) as { count: number } | undefined)
-      ?.count ?? 0;
+  /** Users with a request running, and the worst-case cost of everything running. */
+  const running = new Set<string>();
+  let pendingUsd = 0;
 
-  /** Atomically take one slot of the monthly allowance; false when the cap is reached. */
-  const reserve = db.transaction((userId: string, m: string): boolean => {
-    const row = db.prepare('SELECT count FROM ai_usage WHERE userId = ? AND month = ?').get(userId, m) as { count: number } | undefined;
-    if (limit > 0 && (row?.count ?? 0) >= limit) return false;
-    db.prepare(
-      `INSERT INTO ai_usage (userId, month, count) VALUES (?, ?, 1)
-       ON CONFLICT (userId, month) DO UPDATE SET count = count + 1`,
-    ).run(userId, m);
-    return true;
+  const usedMonth = (userId: string, m: string) =>
+    (db.prepare('SELECT count FROM ai_usage WHERE userId = ? AND month = ?').get(userId, m) as { count: number } | undefined)?.count ?? 0;
+  const usedDay = (userId: string, d: string) =>
+    (db.prepare('SELECT count FROM ai_daily WHERE userId = ? AND day = ?').get(userId, d) as { count: number } | undefined)?.count ?? 0;
+  const spent = (m: string) => (db.prepare('SELECT COALESCE(SUM(costUsd), 0) AS usd FROM ai_usage WHERE month = ?').get(m) as { usd: number }).usd;
+
+  /** Atomically take one request from the daily and monthly allowances; names the cap that is full. */
+  const reserve = db.transaction((userId: string, m: string, d: string): 'ok' | 'month' | 'day' => {
+    if (monthlyLimit > 0 && usedMonth(userId, m) >= monthlyLimit) return 'month';
+    if (dailyLimit > 0 && usedDay(userId, d) >= dailyLimit) return 'day';
+    db.prepare(`INSERT INTO ai_usage (userId, month, count) VALUES (?, ?, 1) ON CONFLICT (userId, month) DO UPDATE SET count = count + 1`).run(userId, m);
+    db.prepare(`INSERT INTO ai_daily (userId, day, count) VALUES (?, ?, 1) ON CONFLICT (userId, day) DO UPDATE SET count = count + 1`).run(userId, d);
+    return 'ok';
   });
-  const refund = (userId: string, m: string) =>
+  const refund = (userId: string, m: string, d: string) => {
     db.prepare('UPDATE ai_usage SET count = MAX(0, count - 1) WHERE userId = ? AND month = ?').run(userId, m);
+    db.prepare('UPDATE ai_daily SET count = MAX(0, count - 1) WHERE userId = ? AND day = ?').run(userId, d);
+  };
   const record = (userId: string, m: string, o: { inputTokens: number; outputTokens: number; costUsd: number }) =>
     db
-      .prepare('UPDATE ai_usage SET inputTokens = inputTokens + ?, outputTokens = outputTokens + ?, costUsd = costUsd + ? WHERE userId = ? AND month = ?')
-      .run(o.inputTokens, o.outputTokens, o.costUsd, userId, m);
+      .prepare(
+        `INSERT INTO ai_usage (userId, month, count, inputTokens, outputTokens, costUsd) VALUES (?, ?, 0, ?, ?, ?)
+         ON CONFLICT (userId, month) DO UPDATE SET inputTokens = inputTokens + excluded.inputTokens,
+           outputTokens = outputTokens + excluded.outputTokens, costUsd = costUsd + excluded.costUsd`,
+      )
+      .run(userId, m, o.inputTokens, o.outputTokens, o.costUsd);
 
-  r.get('/api/v1/ai/status', async (req) => ({
-    enabled: !!estimator,
-    models: AI_MODELS.map((m) => m.id),
-    defaultModel: config.ai.model,
-    defaultEffort: config.ai.effort,
-    monthlyLimit: limit,
-    usedThisMonth: used(req.user!.id),
-  }));
+  const fail = (reply: FastifyReply, e: AiError) => reply.code(aiErrorStatus(e.code)).send({ error: e.message, code: e.code });
+
+  /**
+   * Take the per-user and server-wide running slots. Synchronous, so two requests arriving
+   * together cannot both pass. Returns an error to send, or a function that gives the slots back.
+   */
+  function enter(userId: string): AiError | (() => void) {
+    if (!burst.allow(userId)) return new AiError('rate_limit', 'Too many AI requests. Try again later.');
+    if (running.has(userId)) return new AiError('rate_limit', 'Your previous AI request is still running. Wait for it to finish.');
+    if (running.size >= config.ai.maxConcurrent) return new AiError('overloaded', 'The server is busy with other AI requests. Try again in a minute.');
+    running.add(userId);
+    return () => void running.delete(userId);
+  }
+
+  /**
+   * Run one billed request for a user who already holds a slot (see `enter`): budget and caps
+   * first, then `run`, then the bookkeeping whether it worked or not.
+   */
+  async function charge<T extends { model: string; inputTokens: number; outputTokens: number; costUsd: number }>(
+    reply: FastifyReply,
+    o: { userId: string; kind: string; model: string; worstUsd: number },
+    run: () => Promise<T>,
+  ): Promise<T | FastifyReply> {
+    const t = now();
+    const m = month(t);
+    const d = dayOf(t);
+    if (budget > 0 && spent(m) + pendingUsd + o.worstUsd > budget) {
+      deps.log.warn({ budgetUsd: budget, spentUsd: spent(m) }, 'ai budget reached');
+      return fail(reply, new AiError('limit_reached', 'This server has used its AI budget for this month. It resets on the 1st.'));
+    }
+    const slot = reserve.immediate(o.userId, m, d);
+    if (slot === 'month') return fail(reply, new AiError('limit_reached', `You have used all ${monthlyLimit} AI requests for this month.`));
+    if (slot === 'day') return fail(reply, new AiError('limit_reached', `You have used all ${dailyLimit} AI requests for today. Try again tomorrow.`));
+    pendingUsd += o.worstUsd;
+    const started = Date.now();
+    try {
+      const out = await run();
+      record(o.userId, m, out);
+      deps.log.info({ kind: o.kind, model: out.model, inputTokens: out.inputTokens, outputTokens: out.outputTokens, costUsd: out.costUsd, ms: Date.now() - started }, 'ai request');
+      return out;
+    } catch (e) {
+      const err = toAiError(e);
+      // An answer that came back unusable was still billed: count what it cost.
+      if (err.usage) record(o.userId, m, { inputTokens: err.usage.inputTokens, outputTokens: err.usage.outputTokens, costUsd: usageCostUsd(o.model, err.usage) });
+      // Only give the request back when the API never ran it. A timeout may have been billed, so it stays counted.
+      if (unbilled(err)) refund(o.userId, m, d);
+      deps.log.warn({ kind: o.kind, code: err.code, model: o.model, ms: Date.now() - started }, 'ai request failed');
+      return fail(reply, err);
+    } finally {
+      pendingUsd = Math.max(0, pendingUsd - o.worstUsd);
+    }
+  }
+
+  r.get('/api/v1/ai/status', async (req) => {
+    const t = now();
+    return {
+      enabled: !!estimator,
+      models: AI_MODELS.map((m) => m.id),
+      defaultModel: config.ai.model,
+      defaultEffort: config.ai.effort,
+      monthlyLimit,
+      usedThisMonth: usedMonth(req.user!.id, month(t)),
+      dailyLimit,
+      usedToday: usedDay(req.user!.id, dayOf(t)),
+      webSearch: !!estimator && config.ai.webSearch,
+      // What the whole server has spent is the owner's business only.
+      ...(req.user!.isAdmin ? { monthlyBudgetUsd: budget, spentThisMonthUsd: spent(month(t)) } : {}),
+    };
+  });
 
   r.post('/api/v1/ai/estimate', { bodyLimit: AI_BODY_LIMIT }, async (req, reply) => {
-    const fail = (e: AiError) => reply.code(aiErrorStatus(e.code)).send({ error: e.message, code: e.code });
-    if (!estimator) return fail(new AiError('not_configured', 'AI meal estimates are not enabled on this server.'));
+    if (!estimator) return fail(reply, new AiError('not_configured', 'AI meal estimates are not enabled on this server.'));
     const parsed = estimateBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'validation', code: 'validation', issues: parsed.error.issues });
     const b = parsed.data;
@@ -106,72 +202,64 @@ export function registerAiRoutes(r: FastifyInstance, deps: AiDeps) {
       mediaType = sniffImageType(image) ?? b.mediaType ?? null;
       if (!mediaType) return reply.code(400).send({ error: 'image must be JPEG, PNG or WebP', code: 'validation' });
     }
-    if (!image && !b.description?.trim()) return fail(new AiError('no_input', 'Add a photo or describe what you ate.'));
+    if (!image && !b.description?.trim()) return fail(reply, new AiError('no_input', 'Add a photo or describe what you ate.'));
+
+    // The server decides whether searching is allowed and how much; the client only chooses the mode.
+    const webSearch: AiWebSearch = config.ai.webSearch ? (b.webSearch ?? 'auto') : 'off';
+    const maxSearches = webSearch === 'off' ? 0 : Math.min(config.ai.maxSearches, WEB_SEARCH_MAX_USES[webSearch]);
 
     const userId = req.user!.id;
-    if (!burst.allow(userId)) return fail(new AiError('rate_limit', 'Too many AI requests. Try again later.'));
-    const m = month(now());
-    if (!reserve.immediate(userId, m)) {
-      return fail(new AiError('limit_reached', `You have used all ${limit} AI estimates for this month.`));
-    }
-    const started = Date.now();
+    const leave = enter(userId);
+    if (leave instanceof AiError) return fail(reply, leave);
     try {
-      const out = await estimator.estimate({ model, effort: b.effort ?? config.ai.effort, imageBase64: image, mediaType, description: b.description });
-      record(userId, m, out);
-      deps.log.info({ model: out.model, inputTokens: out.inputTokens, outputTokens: out.outputTokens, ms: Date.now() - started }, 'ai estimate');
-      return out;
-    } catch (e) {
-      const err = toAiError(e);
-      // Nothing was generated (or billed) for these: give the slot back.
-      if (['no_input', 'auth', 'rate_limit', 'overloaded', 'api_error', 'not_configured'].includes(err.code)) refund(userId, m);
-      deps.log.warn({ code: err.code, model, ms: Date.now() - started }, 'ai estimate failed');
-      return fail(err);
+      return await charge(
+        reply,
+        // Worst case: the whole output allowance, the photo and prompt, and every search with its results.
+        { userId, kind: 'estimate', model, worstUsd: worstCaseCostUsd(model, ESTIMATE_MAX_TOKENS, 10_000 + maxSearches * 20_000, maxSearches) },
+        () => estimator.estimate({ model, effort: b.effort ?? config.ai.effort, imageBase64: image, mediaType, description: b.description, webSearch, maxSearches }),
+      );
+    } finally {
+      leave();
     }
   });
 
   /**
    * Import from a nutrition page: the user gives a restaurant's nutrition page (URL) or pastes
    * its text; Claude transcribes the menu items. One user-initiated read; nothing is cached or
-   * shared between users. Counts as one AI use against the monthly cap.
+   * shared between users. Counts as one AI request against the caps.
    */
   r.post('/api/v1/ai/menu-import', { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) => {
-    const fail = (e: AiError) => reply.code(aiErrorStatus(e.code)).send({ error: e.message, code: e.code });
-    if (!estimator) return fail(new AiError('not_configured', 'AI features are not enabled on this server.'));
+    if (!estimator) return fail(reply, new AiError('not_configured', 'AI features are not enabled on this server.'));
     const parsed = menuBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'validation', code: 'validation', issues: parsed.error.issues });
     const b = parsed.data;
     const model = b.model || config.ai.model;
     if (!allowedModels.has(model)) return reply.code(400).send({ error: `unknown model: ${model}`, code: 'validation' });
     const userId = req.user!.id;
-    if (!burst.allow(userId)) return fail(new AiError('rate_limit', 'Too many AI requests. Try again later.'));
-
-    // Read the page first: a link that cannot be opened costs nothing.
-    let page: MenuPage;
+    const leave = enter(userId);
+    if (leave instanceof AiError) return fail(reply, leave);
     try {
-      if (b.text?.trim()) page = checkText(b.text, b.url?.trim() || null);
-      else if (b.url?.trim()) {
-        const fetched = await (deps.fetchPage ?? fetchPublicPage)(b.url);
-        page = pageFromBytes(fetched.bytes, fetched.contentType, fetched.finalUrl);
-      } else return fail(new AiError('no_input', 'Paste a link to the restaurant’s nutrition page, or its text.'));
-    } catch (e) {
-      if (e instanceof PageFetchError) return reply.code(422).send({ error: e.message, code: 'page' });
-      if (e instanceof AiError) return fail(e);
-      throw e;
-    }
-
-    const m = month(now());
-    if (!reserve.immediate(userId, m)) return fail(new AiError('limit_reached', `You have used all ${limit} AI requests for this month.`));
-    const started = Date.now();
-    try {
-      const out = await estimator.readMenu({ page, model, effort: b.effort ?? config.ai.effort });
-      record(userId, m, out);
-      deps.log.info({ model: out.model, items: out.menu.items.length, inputTokens: out.inputTokens, outputTokens: out.outputTokens, ms: Date.now() - started }, 'ai menu import');
-      return out;
-    } catch (e) {
-      const err = toAiError(e);
-      if (['no_input', 'auth', 'rate_limit', 'overloaded', 'api_error', 'not_configured'].includes(err.code)) refund(userId, m);
-      deps.log.warn({ code: err.code, model, ms: Date.now() - started }, 'ai menu import failed');
-      return fail(err);
+      // Read the page first: a link that cannot be opened costs nothing.
+      let page: MenuPage;
+      try {
+        if (b.text?.trim()) page = checkText(b.text, b.url?.trim() || null);
+        else if (b.url?.trim()) {
+          const fetched = await (deps.fetchPage ?? fetchPublicPage)(b.url);
+          page = pageFromBytes(fetched.bytes, fetched.contentType, fetched.finalUrl);
+        } else return fail(reply, new AiError('no_input', 'Paste a link to the restaurant’s nutrition page, or its text.'));
+      } catch (e) {
+        if (e instanceof PageFetchError) return reply.code(422).send({ error: e.message, code: 'page' });
+        if (e instanceof AiError) return fail(reply, e);
+        throw e;
+      }
+      return await charge(
+        reply,
+        // Worst case: the whole output allowance plus the largest page the import accepts.
+        { userId, kind: 'menu-import', model, worstUsd: worstCaseCostUsd(model, MENU_MAX_TOKENS, 150_000) },
+        () => estimator.readMenu({ page, model, effort: b.effort ?? config.ai.effort }),
+      );
+    } finally {
+      leave();
     }
   });
 }
