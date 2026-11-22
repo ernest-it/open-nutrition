@@ -68,7 +68,7 @@ Prebuilt server images are at `ghcr.io/ernest-it/open-nutrition:latest` (amd64 a
 | `LLM_PROVIDER` | *(unset)* | Set to `anthropic` to enable AI meal logging on the server |
 | `LLM_API_KEY` | | Claude API key (`ANTHROPIC_API_KEY` also works). Stays on the server |
 | `AI_MONTHLY_LIMIT` | `0` | Per-user cap on AI estimates per month (`0` = unlimited) |
-| `USDA_API_KEY` | *(unset)* | Optional free data.gov key; enables the USDA Branded fallback for barcodes |
+| `USDA_API_KEY` | *(unset)* | Optional free [api.data.gov](https://api.data.gov/signup/) key; enables search of USDA packaged (branded) foods and the USDA fallback for barcodes |
 | `FOOD_DB_PATH` | `/app/foods.db` (in the image) | Path to the bundled USDA food database |
 
 The full list (ports, registration, proxy, time zone) is in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**, which also covers Kubernetes, Proxmox, reverse proxies and backups.

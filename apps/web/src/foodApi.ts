@@ -7,6 +7,29 @@ export async function searchFoods(q: string, limit = 25, signal?: AbortSignal): 
   return r.foods ?? [];
 }
 
+/** null until known; false once the server said it has no USDA key (stop asking). */
+let brandedEnabled: boolean | null = null;
+export const brandedSearchAvailable = () => brandedEnabled === true;
+
+/**
+ * Packaged foods (USDA FoodData Central, Branded) via the server. Returns null when the server
+ * has packaged-food search turned off.
+ */
+export async function searchBranded(q: string, signal?: AbortSignal): Promise<Food[] | null> {
+  if (brandedEnabled === false) return null;
+  try {
+    const r = await api<{ foods: Food[] }>(`/api/v1/foods/branded?q=${encodeURIComponent(q)}`, { signal });
+    brandedEnabled = true;
+    return r.foods ?? [];
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) {
+      brandedEnabled = false;
+      return null;
+    }
+    throw e;
+  }
+}
+
 /** The user's own foods (custom, favourites, cached) whose name or brand matches. */
 export function searchLocalFoods(q: string, limit = 15): Food[] {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);

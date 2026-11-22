@@ -50,6 +50,14 @@ function migrate(db: DB) {
 
     -- Open Food Facts / USDA Branded barcode cache. Shared by all users and never
     -- merged into user data. json = mapped Food JSON, or NULL for a cached miss.
+    -- USDA Branded text-search cache (packaged foods), keyed by normalised query. Shared by
+    -- all users and never merged into user data. json = array of mapped foods.
+    CREATE TABLE IF NOT EXISTS branded_cache (
+      query TEXT PRIMARY KEY,
+      json TEXT NOT NULL,
+      fetchedAt INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS off_cache (
       barcode TEXT PRIMARY KEY,
       json TEXT,

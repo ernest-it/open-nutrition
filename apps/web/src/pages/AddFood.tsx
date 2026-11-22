@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { isValidBarcode, kcalFromMacros, N, OFF_ATTRIBUTION, sumNutrients, type Food, type FoodData, type Meal, type NutrientMap } from '@open-nutrition/shared';
 import type { AddRequest, AddTab } from '../addFood';
 import { errorMessage, removeRows, restoreRows, useLoggedDays, usePrefs, useStore, store } from '../state';
-import { getAiStatus, lookupBarcode, searchFoods, searchLocalFoods, type AiStatus, type BarcodeSource } from '../foodApi';
+import { getAiStatus, lookupBarcode, brandedSearchAvailable, searchBranded, searchFoods, searchLocalFoods, type AiStatus, type BarcodeSource } from '../foodApi';
 import { FoodPortion, FoodRow, MacroInputs, NutrientSummary, plural } from '../components';
 import { InlineError, Spinner, useConfirm, useToast } from '../feedback';
 import { FoodEditor } from './Foods';
@@ -115,6 +115,27 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Food | FoodData | null>(null);
   const [creating, setCreating] = useState(false);
+  /** Packaged foods from USDA via the server; null = not available on this server. */
+  const [branded, setBranded] = useState<{ q: string; foods: Food[] | null; error: string | null } | null>(null);
+
+  useEffect(() => {
+    const text = q.trim();
+    if (text.length < 3) {
+      setBranded(null);
+      return;
+    }
+    const ctl = new AbortController();
+    // A little slower than the main search: it goes out to the internet.
+    const t = setTimeout(() => {
+      searchBranded(text, ctl.signal)
+        .then((foods) => setBranded({ q: text, foods, error: null }))
+        .catch((e) => !ctl.signal.aborted && setBranded({ q: text, foods: [], error: errorMessage(e) }));
+    }, 600);
+    return () => {
+      clearTimeout(t);
+      ctl.abort();
+    };
+  }, [q]);
 
   useEffect(() => {
     const text = q.trim();
@@ -166,6 +187,10 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
   const local = text ? searchLocalFoods(text) : [];
   const localUsda = new Set(local.filter((f) => f.source === 'usda').map((f) => f.sourceId));
   const server = remote.filter((f) => !localUsda.has(f.sourceId ?? f.id.replace('usda:', '')));
+  const packaged = branded?.foods?.filter((f) => !localUsda.has(f.sourceId)) ?? [];
+  const brandedPending = text.length >= 3 && branded?.q !== text;
+  // Only once the server has answered with results at least once (no flash where it is off).
+  const showBranded = text.length >= 3 && brandedSearchAvailable() && branded?.foods !== null;
   const favs = store.favoriteFoods();
   const recents = store.recentFoods(20).filter((f) => !f.favorite);
   const searching = text.length >= 2 && (loading || settled !== text);
@@ -233,6 +258,24 @@ function SearchTab({ day, meal, onLogged }: TabProps) {
           ) : (
             !searching &&
             !error && <Empty>No matches for “{text}”. Try fewer or different words, or create it as a custom food.</Empty>
+          )}
+          {showBranded && (brandedPending || packaged.length > 0 || branded?.error) && (
+            <>
+              <h4 className="list-title">
+                Packaged foods (USDA) {brandedPending && <Spinner label="Searching packaged foods" />}
+              </h4>
+              <InlineError>{branded?.q === text ? branded.error : null}</InlineError>
+              {packaged.length > 0 && (
+                <>
+                  <ul className={`list ${brandedPending ? 'stale' : ''}`}>
+                    {packaged.map((f) => (
+                      <FoodRow key={f.id} food={f} onPick={() => setPicked(f)} />
+                    ))}
+                  </ul>
+                  <p className="muted small">Grocery products from USDA FoodData Central, as labelled by their makers.</p>
+                </>
+              )}
+            </>
           )}
         </>
       )}

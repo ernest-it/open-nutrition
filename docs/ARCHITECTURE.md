@@ -78,11 +78,12 @@ The v1 "core" nutrients, shown by default, are: calories, protein, carbohydrates
 
 ## Food data
 
-Three kinds of food reach the diary:
+Four kinds of food reach the diary:
 
 1. **Bundled USDA foods** (`apps/mobile/assets/foods.db`, built from USDA FoodData Central Foundation + SR Legacy by `data/build-foods-db.mjs`). A read-only SQLite file with a `foods` table (per-100 g nutrients and portions as JSON), an FTS5 index (`foods_fts`, porter stemming) and a `meta` table (source, release dates, attribution). Search is a bm25-ranked FTS5 query. The app queries it on the device; the server reads the same file from `FOOD_DB_PATH`. Ids are `usda:<fdcId>`. These foods are **never synced**. Logging one copies it into `foods` under a fresh id (`source: 'usda'`, `sourceId: fdcId`, deduplicated on source + sourceId).
 2. **Open Food Facts products** (barcode scan). The server proxies lookups with a custom User-Agent and keeps results in an `off_cache` table, **separate from user data**. When USDA Branded fallback is enabled (`USDA_API_KEY`), unknown barcodes are looked up there. A product the user logs is copied into `foods` like any other food. Images are not stored.
-3. **Custom foods and AI foods**, created by the user and synced like everything else.
+3. **USDA packaged (branded) foods**, server mode only and only when `USDA_API_KEY` is set (`GET /api/v1/foods/branded?q=`, `apps/server/src/branded.ts`). The server queries USDA FoodData Central (public-domain US government data), tidies names, re-ranks by query-word matches, and caches mapped results per query in a `branded_cache` table, **separate from user data** (a week; empty results a day). Results carry `fdc:<fdcId>` ids, which are never stored: logging one copies it into `foods` (`source: 'usda'`, `sourceId: fdcId`), like a bundled food. Clients show them under "Packaged foods (USDA)" below the bundled results.
+4. **Custom foods and AI foods**, created by the user and synced like everything else.
 
 See [LICENSING.md](../LICENSING.md#data-licenses) for why OFF data stays in its own cache.
 

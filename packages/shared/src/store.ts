@@ -13,6 +13,7 @@ import type { Profile } from './calc';
 import type { NutrientMap } from './nutrients';
 import {
   BUILTIN_PREFIX,
+  isStoredFoodId,
   COLLECTION_NAMES,
   type AiEstimateRow,
   type ChangeSet,
@@ -378,8 +379,8 @@ export class NutritionStore {
    * reusing an existing copy with the same source + sourceId.
    */
   ensureFood(food: Food | (FoodData & { id?: string })): Food {
-    if (food.id && !food.id.startsWith(BUILTIN_PREFIX)) {
-      const existing = this.get('foods', food.id);
+    if (isStoredFoodId(food.id)) {
+      const existing = this.get('foods', food.id!);
       if (existing) return existing;
     }
     const sourceId =
@@ -587,7 +588,7 @@ export class NutritionStore {
     delete (data as { updatedAt?: number }).updatedAt;
     delete (data as { deletedAt?: number | null }).deletedAt;
     if (id && this.maps.foods.has(id)) return this.update('foods', id, { ...data, deletedAt: null } as Partial<FoodData>)!;
-    return this.insert('foods', { ...data, id: id && !id.startsWith(BUILTIN_PREFIX) ? id : undefined });
+    return this.insert('foods', { ...data, id: isStoredFoodId(id) ? id : undefined });
   }
 
   // ---- targets ----------------------------------------------------------------

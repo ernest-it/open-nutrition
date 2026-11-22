@@ -215,10 +215,29 @@ const UNIT_FACTOR: Record<string, Record<string, number>> = {
   µg: { ug: 1, µg: 1, mg: 1000 },
 };
 
-const titleCase = (s: string) => (s === s.toUpperCase() ? s.toLowerCase().replace(/\b\p{L}/gu, (c) => c.toUpperCase()) : s);
+/** "KIT'S ORGANIC BAR" → "Kit's Organic Bar" (only ALL-CAPS text; a letter after an apostrophe stays small). */
+export const titleCase = (s: string) =>
+  s === s.toUpperCase() ? s.toLowerCase().replace(/(^|[^\p{L}\p{N}'’])(\p{L})/gu, (_m, pre: string, c: string) => pre + c.toUpperCase()) : s;
+
+/**
+ * Tidy a branded description: drop repeated comma-separated parts (USDA descriptions often
+ * repeat themselves, "BAR, CASHEW, BAR, CASHEW") and a leading copy of the brand.
+ */
+export function cleanBrandedName(description: string, brand: string | null): string {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const p of description.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const key = p.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(p);
+  }
+  if (brand && parts.length > 1 && parts[0]!.toLowerCase() === brand.toLowerCase()) parts.shift();
+  return parts.join(', ');
+}
 
 /** Map an FDC branded search hit (nutrients per 100 g/ml) to a Food. */
-export function mapFdcBranded(f: FdcBrandedFood, code: string): BarcodeFood | null {
+export function mapFdcBranded(f: FdcBrandedFood, code: string | null): BarcodeFood | null {
   const nutrients: NutrientMap = {};
   let kj: number | null = null;
   for (const n of f.foodNutrients ?? []) {
@@ -243,9 +262,9 @@ export function mapFdcBranded(f: FdcBrandedFood, code: string): BarcodeFood | nu
   }
   const brand = (f.brandName || f.brandOwner || '').trim();
   return {
-    name: titleCase(name).slice(0, 300),
+    name: titleCase(cleanBrandedName(name, brand || null)).slice(0, 300),
     brand: brand ? titleCase(brand).slice(0, 200) : null,
-    barcode: code.slice(0, 32),
+    barcode: code ? code.slice(0, 32) : null,
     source: 'usda',
     sourceId: String(f.fdcId),
     servings,

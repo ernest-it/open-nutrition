@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { FlatList, View } from 'react-native';
 import {
   CORE_NUTRIENTS,
+  isStoredFoodId,
   N,
   NUTRIENTS,
   recipePer100g,
@@ -377,7 +378,7 @@ export function RecipeEditScreen({ id, onDone }: { id?: string; onDone: () => vo
 
   function addIngredient(f: Food) {
     const a = defaultAmount(f);
-    setIngredients((list) => [...list, { foodId: f.id.startsWith('usda:') ? null : f.id, name: f.name.slice(0, 300), grams: a.grams, nutrients: f.nutrients }]);
+    setIngredients((list) => [...list, { foodId: isStoredFoodId(f.id) ? f.id : null, name: f.name.slice(0, 300), grams: a.grams, nutrients: f.nutrients }]);
     setPicking(false);
     haptic.tap();
     toast(`Added ${f.name.split(',')[0]}`);

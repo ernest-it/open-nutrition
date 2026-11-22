@@ -17,6 +17,7 @@ import {
   FOOD_SEARCH_SQL,
   OFF_USER_AGENT,
   builtinFdcId,
+  isStoredFoodId,
   ftsQuery,
   isValidBarcode,
   mapOffProduct,
@@ -153,10 +154,29 @@ export async function searchFoods(store: NutritionStore, text: string, limit = 4
   return [...mine, ...builtin.filter((f) => !usdaIds.has(f.sourceId))].slice(0, limit);
 }
 
+/** Per server: false once it said packaged-food search is off (stop asking). */
+const brandedOff = new Set<string>();
+
+/**
+ * Packaged foods (USDA FoodData Central, Branded) through the user's server. null when there
+ * is no server (local-only mode) or the server has the feature turned off.
+ */
+export async function searchBrandedFoods(account: Account, text: string, signal?: AbortSignal): Promise<Food[] | null> {
+  if (!account.server || brandedOff.has(account.server.baseUrl)) return null;
+  const res = await serverFetch(account, `/api/v1/foods/branded?q=${encodeURIComponent(text)}`, { signal });
+  if (res.status === 404) {
+    brandedOff.add(account.server.baseUrl);
+    return null;
+  }
+  if (!res.ok) throw new Error(res.status === 429 ? 'Too many searches right now; try again in a minute.' : `Packaged-food search failed (HTTP ${res.status})`);
+  const body = (await res.json()) as { foods?: Food[] };
+  return body.foods ?? [];
+}
+
 /** The stored copy of a food (for builtin foods: the copy made when it was logged), if any. */
 export function storedCopy(store: NutritionStore, food: Food | FoodData): Food | undefined {
   const id = (food as Food).id;
-  if (id && !id.startsWith('usda:')) return store.get('foods', id);
+  if (isStoredFoodId(id)) return store.get('foods', id!);
   if (food.sourceId == null) return undefined;
   return store.all('foods').find((f) => f.source === food.source && f.sourceId === food.sourceId);
 }

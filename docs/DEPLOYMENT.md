@@ -26,7 +26,7 @@ Open Nutrition is **one process with one SQLite file**. Pick whichever platform 
 | `LLM_PROVIDER` | *(unset)* | `anthropic` enables AI meal logging; see [AI_MEAL_LOGGING.md](AI_MEAL_LOGGING.md) |
 | `LLM_API_KEY` | | Claude API key (`ANTHROPIC_API_KEY` also works). Server-side only. Use a dedicated key in a Console workspace with a monthly spend limit |
 | `AI_MONTHLY_LIMIT` | `0` | Per-user cap on AI estimates per calendar month (`0` = unlimited) |
-| `USDA_API_KEY` | *(unset)* | Optional free data.gov key; enables the USDA Branded fallback for barcodes not in Open Food Facts |
+| `USDA_API_KEY` | *(unset)* | Optional free [api.data.gov](https://api.data.gov/signup/) key (1,000 requests/hour). Enables searching USDA packaged (branded) foods, about 430,000 grocery products, from the phone and web, and the USDA fallback for barcodes not in Open Food Facts. Results are cached on the server for a week. |
 | `FOOD_DB_PATH` | `/app/foods.db` (in the image) | Bundled USDA food database (read-only). Source checkout default: `apps/mobile/assets/foods.db` |
 | `TZ` | `UTC` | Time zone |
 

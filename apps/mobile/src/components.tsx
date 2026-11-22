@@ -18,8 +18,8 @@ import {
   type Serving,
 } from '@open-nutrition/shared';
 import { Icon } from './icons';
-import { searchFoods } from './foods';
-import { useStore } from './state';
+import { searchBrandedFoods, searchFoods } from './foods';
+import { useAccount, useStore } from './state';
 import {
   Badge,
   Dialog,
@@ -279,6 +279,27 @@ export function FoodSearch({
   const [results, setResults] = useState<Food[]>([]);
   const [busy, setBusy] = useState(false);
   const seq = useRef(0);
+  const account = useAccount();
+  /** Packaged foods from the server; null foods = not available here. */
+  const [branded, setBranded] = useState<{ q: string; foods: Food[] | null; error: string | null } | null>(null);
+  useEffect(() => {
+    const text = q.trim();
+    if (text.length < 3 || !account.server) {
+      setBranded(null);
+      return;
+    }
+    const ctl = new AbortController();
+    // Slower than the offline search: this one goes out to the internet.
+    const timer = setTimeout(() => {
+      searchBrandedFoods(account, text, ctl.signal)
+        .then((foods) => setBranded({ q: text, foods, error: null }))
+        .catch((e: Error) => !ctl.signal.aborted && setBranded({ q: text, foods: [], error: e.message }));
+    }, 600);
+    return () => {
+      clearTimeout(timer);
+      ctl.abort();
+    };
+  }, [q, account]);
   useEffect(() => {
     const text = q.trim();
     if (!text) {
@@ -301,6 +322,34 @@ export function FoodSearch({
   }, [q, store]);
 
   const searching = q.trim().length > 0;
+  const text = q.trim();
+  const mineUsda = new Set(results.filter((f) => f.source === 'usda').map((f) => f.sourceId));
+  const packaged = branded?.q === text ? (branded.foods ?? []).filter((f) => !mineUsda.has(f.sourceId)) : [];
+  const brandedPending = !!account.server && text.length >= 3 && branded?.q !== text;
+  const brandedFooter =
+    searching && branded?.foods !== null && (brandedPending || packaged.length > 0 || branded?.error) ? (
+      <View style={{ paddingTop: 8 }}>
+        <View style={[styles.row, { paddingHorizontal: 12, paddingVertical: 6 }]}>
+          <T small bold muted style={{ flex: 1, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            Packaged foods (USDA)
+          </T>
+          {brandedPending && <ActivityIndicator size="small" color={t.muted} />}
+        </View>
+        {branded?.q === text && branded.error ? (
+          <T small color={t.danger} style={{ paddingHorizontal: 12 }}>
+            {branded.error}
+          </T>
+        ) : null}
+        {packaged.map((f) => (
+          <FoodRow key={f.id} food={f} onPress={() => onPick(f)} />
+        ))}
+        {packaged.length > 0 && (
+          <T small muted style={{ paddingHorizontal: 12, paddingTop: 4 }}>
+            Grocery products from USDA FoodData Central, as labelled by their makers.
+          </T>
+        )}
+      </View>
+    ) : undefined;
   return (
     <View style={{ flex: 1 }}>
       <View style={{ paddingHorizontal: 12 }}>
@@ -340,11 +389,12 @@ export function FoodSearch({
         contentContainerStyle={{ paddingHorizontal: 4, paddingBottom: 24 }}
         ListHeaderComponent={!searching ? header : undefined}
         renderItem={({ item }) => <FoodRow food={item} onPress={() => onPick(item)} />}
+        ListFooterComponent={brandedFooter}
         ListEmptyComponent={
           searching ? (
             busy ? undefined : (
               <View style={{ padding: 16 }}>
-                <T muted>No foods match “{q.trim()}”.</T>
+                <T muted>{packaged.length ? `Nothing in your foods or the food database matches “${text}”.` : `No foods match “${text}”.`}</T>
                 {emptyContent?.(q.trim())}
               </View>
             )

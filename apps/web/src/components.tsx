@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   addDays,
+  isStoredFoodId,
   multiplyNutrients,
   N,
   scaleNutrients,
@@ -624,7 +625,7 @@ export function FoodPortion({
 /** The user's stored copy of a food (itself, or the cached copy of a builtin/OFF food), if any. */
 export function storedCopy(food: Food | FoodData): Food | undefined {
   const id = 'id' in food ? (food.id as string | undefined) : undefined;
-  if (id && !id.startsWith('usda:')) return store.get('foods', id);
+  if (isStoredFoodId(id)) return store.get('foods', id!);
   const source = id?.startsWith('usda:') ? 'usda' : food.source;
   const sourceId = id?.startsWith('usda:') && food.sourceId == null ? id.slice(5) : food.sourceId;
   if (sourceId == null) return undefined;

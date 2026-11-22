@@ -282,3 +282,7 @@ export interface SyncResponse {
  * copies it into `foods` under a fresh id with `source: 'usda'`.
  */
 export const BUILTIN_PREFIX = 'usda:';
+/** Ids of packaged-food search results from the server (USDA Branded); never stored as such. */
+export const BRANDED_PREFIX = 'fdc:';
+/** True for ids that name a row in the user's `foods` (not a bundled food or a search result). */
+export const isStoredFoodId = (id: string | null | undefined): boolean => !!id && !id.startsWith(BUILTIN_PREFIX) && !id.startsWith(BRANDED_PREFIX);

@@ -4,7 +4,7 @@ import fastifyStatic from '@fastify/static';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { COLLECTION_NAMES, diaryToCsv, syncRequestSchema, type DiaryEntry } from '@open-nutrition/shared';
+import { COLLECTION_NAMES, USDA_ATTRIBUTION, diaryToCsv, syncRequestSchema, type DiaryEntry } from '@open-nutrition/shared';
 import { z } from 'zod';
 import { RateLimiter, createSession, hashPassword, userForToken, verifyPassword, type User } from './auth';
 import type { Config } from './config';
@@ -14,6 +14,7 @@ import { VERSION } from './version';
 import { createMealEstimator, type AnthropicClient } from './llm';
 import { registerAiRoutes } from './ai';
 import { BarcodeError, BarcodeService } from './barcode';
+import { BrandedSearch } from './branded';
 import { FoodDb, MAX_SEARCH_LIMIT, openFoodDb } from './foods';
 import { registerMcp } from './mcp';
 
@@ -76,6 +77,7 @@ export function buildApp(config: Config, db: DB = openDatabase(config.databaseFi
     offPerMinute: deps.offPerMinute,
     log: { warn: (m) => app.log.warn(m) },
   });
+  const branded = config.usdaApiKey ? new BrandedSearch({ db, apiKey: config.usdaApiKey, fetchImpl: deps.fetchImpl, now: deps.now }) : null;
   const estimator = createMealEstimator(config, deps.anthropic);
   if (config.ai.provider === 'anthropic' && !estimator) app.log.warn('LLM_PROVIDER=anthropic but no LLM_API_KEY/ANTHROPIC_API_KEY is set; AI is disabled');
 
@@ -121,6 +123,7 @@ export function buildApp(config: Config, db: DB = openDatabase(config.databaseFi
     serverId: serverId(db),
     foodDb: !!foodDb,
     aiEnabled: !!estimator,
+    brandedSearch: !!branded,
   }));
 
   app.post('/api/v1/auth/register', async (req, reply) => {
@@ -221,6 +224,20 @@ export function buildApp(config: Config, db: DB = openDatabase(config.databaseFi
       const q = (req.query.q ?? '').slice(0, 200);
       const limit = Math.max(1, Math.min(MAX_SEARCH_LIMIT, Number(req.query.limit) || 20));
       return { foods: foodDb.search(q, limit) };
+    });
+
+    /** Packaged foods from USDA FoodData Central (Branded); 404 when the server has no USDA key. */
+    r.get<{ Querystring: { q?: string } }>('/api/v1/foods/branded', async (req, reply) => {
+      if (!branded) return reply.code(404).send({ error: 'packaged-food search is not enabled on this server (set USDA_API_KEY)' });
+      try {
+        return { foods: await branded.search(req.query.q ?? ''), attribution: USDA_ATTRIBUTION };
+      } catch (e) {
+        if (e instanceof BarcodeError) {
+          if (e.retryAfterSeconds) reply.header('retry-after', String(e.retryAfterSeconds));
+          return reply.code(e.statusCode).send({ error: e.message });
+        }
+        throw e;
+      }
     });
 
     r.get<{ Params: { code: string } }>('/api/v1/foods/barcode/:code', async (req, reply) => {
